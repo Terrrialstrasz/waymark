@@ -1,6 +1,6 @@
 # Waymark AI Resource Pack v2
 
-This pack is the updated source of truth for building **Waymark** after the latest product, domain, workflow, and UI decisions.
+This pack contains product, domain, workflow, and UI decisions for building **Waymark**. The runtime data source-of-truth contract lives in `docs/waymark-source-of-truth-contract.md`.
 
 Waymark is a private, phone-first, local-first Life OS built around paths, marks, memories, and daily closure.
 
@@ -20,7 +20,7 @@ Core sentence:
 
 | Rule | Meaning |
 |---|---|
-| Phone owns the truth | SQLite/local storage first; cloud is backup later |
+| Waymark Vault owns logical truth | SQLite/local storage is a working copy; cloud storage is governed by the Vault contract |
 | Map lives in code | No back office, admin panel, or CMS |
 | Marks are proof | Marks do not own planning, memory, pack check, workout, or closure logic |
 | Two normal mark flows | PlannedMark and QuickMark |

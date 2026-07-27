@@ -1,0 +1,36 @@
+{
+  "cli": {
+    "version": ">= 13.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_WAYMARK_APP_VARIANT": "dev"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "apk-preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS": "true"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS": "true"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {}
+  }
+}

@@ -1,0 +1,80 @@
+CREATE TABLE IF NOT EXISTS pack_check_templates (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  path_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT,
+  template_type TEXT,
+  default_timing_rule_json TEXT,
+  default_available_offset_min INTEGER,
+  default_due_offset_min INTEGER,
+  default_signal_rule_json TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  sync_status TEXT NOT NULL DEFAULT 'local',
+  local_revision INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(path_id) REFERENCES paths(id)
+);
+
+CREATE TABLE IF NOT EXISTS pack_check_item_templates (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  pack_check_template_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  description TEXT,
+  is_required INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  order_index INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  sync_status TEXT NOT NULL DEFAULT 'local',
+  local_revision INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(pack_check_template_id) REFERENCES pack_check_templates(id)
+);
+
+CREATE TABLE IF NOT EXISTS pack_check_instances (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  template_id TEXT,
+  trail_day_id TEXT NOT NULL,
+  target_mark_instance_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL,
+  available_from INTEGER,
+  due_at INTEGER,
+  completed_at INTEGER,
+  skipped_at INTEGER,
+  cancelled_at INTEGER,
+  generation_key TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  sync_status TEXT NOT NULL DEFAULT 'local',
+  local_revision INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(template_id) REFERENCES pack_check_templates(id),
+  FOREIGN KEY(trail_day_id) REFERENCES trail_days(id),
+  FOREIGN KEY(target_mark_instance_id) REFERENCES mark_instances(id)
+);
+
+CREATE TABLE IF NOT EXISTS pack_check_item_instances (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  pack_check_instance_id TEXT NOT NULL,
+  template_item_id TEXT,
+  label TEXT NOT NULL,
+  is_required INTEGER NOT NULL DEFAULT 1,
+  is_checked INTEGER NOT NULL DEFAULT 0,
+  checked_at INTEGER,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  order_index INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  sync_status TEXT NOT NULL DEFAULT 'local',
+  local_revision INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(pack_check_instance_id) REFERENCES pack_check_instances(id)
+);

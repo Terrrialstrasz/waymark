@@ -8,11 +8,12 @@
 
 | Layer | Responsibility |
 |---|---|
-| SQLite | Source of truth for records |
+| Waymark Vault | Logical source of truth for records |
+| SQLite | Local/offline working copy |
 | Local filesystem | Media files |
 | Secure storage | Secrets, app lock keys |
 | Encrypted export | Manual safe backup |
-| Encrypted cloud backup later | Backup/sync only |
+| Cloud storage later | Explicit sync/restore storage governed by the Vault contract |
 | Family Vault later | Selected sharing |
 
 ## Privacy scopes
@@ -47,7 +48,7 @@
 
 ## Backup direction
 
-Manual local backup first, encrypted export second, cloud later.
+Manual local backup first, encrypted export second, explicit cloud sync/restore later.
 
 ```text
 Create record locally
@@ -63,7 +64,7 @@ Create record locally
 | No plaintext diary in cloud | Encrypt before upload |
 | No plaintext memory captions | Encrypt payload |
 | Media encrypted later | Encrypted blobs |
-| Cloud not source of truth | Phone remains source |
+| Cloud services are not independent truth | Turso and Google Drive are storage layers governed by the Waymark Vault |
 | Sharing later only | Family Vault after privacy stable |
 
 ## Build order
@@ -84,7 +85,7 @@ Create record locally
 
 | Avoid | Reason |
 |---|---|
-| Cloud-first app | Violates phone owns truth |
+| Cloud-first app | Violates local-first daily runtime |
 | Plaintext cloud backup | Privacy risk |
 | Family sharing before vault | Unsafe |
 | Analytics dashboard | Privacy risk |

@@ -1,0 +1,995 @@
+{
+  "count": 66,
+  "assets": [
+    {
+      "file": "01_utility_signature_set/back.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "back",
+      "crop_box_xyxy": [
+        38,
+        424,
+        114,
+        500
+      ],
+      "width": 766,
+      "height": 700,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/close.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "close",
+      "crop_box_xyxy": [
+        137,
+        424,
+        213,
+        500
+      ],
+      "width": 648,
+      "height": 671,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/search.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "search",
+      "crop_box_xyxy": [
+        235,
+        424,
+        311,
+        500
+      ],
+      "width": 808,
+      "height": 794,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/more.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "more",
+      "crop_box_xyxy": [
+        332,
+        424,
+        408,
+        500
+      ],
+      "width": 738,
+      "height": 172,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/bell.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "bell",
+      "crop_box_xyxy": [
+        429,
+        424,
+        505,
+        500
+      ],
+      "width": 781,
+      "height": 994,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/language.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "language",
+      "crop_box_xyxy": [
+        526,
+        424,
+        602,
+        500
+      ],
+      "width": 876,
+      "height": 885,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/chevron.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "chevron",
+      "crop_box_xyxy": [
+        623,
+        424,
+        699,
+        500
+      ],
+      "width": 492,
+      "height": 908,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/calendar.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "calendar",
+      "crop_box_xyxy": [
+        720,
+        424,
+        796,
+        500
+      ],
+      "width": 876,
+      "height": 946,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/clock.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "clock",
+      "crop_box_xyxy": [
+        826,
+        424,
+        902,
+        500
+      ],
+      "width": 898,
+      "height": 903,
+      "notes": ""
+    },
+    {
+      "file": "01_utility_signature_set/camera.webp",
+      "board": "component_board_1",
+      "category": "01_utility_signature_set",
+      "name": "camera",
+      "crop_box_xyxy": [
+        923,
+        424,
+        999,
+        500
+      ],
+      "width": 997,
+      "height": 909,
+      "notes": ""
+    },
+    {
+      "file": "02_navigation_signature_set/today_trail_leaf_icon.webp",
+      "board": "component_board_1",
+      "category": "02_navigation_signature_set",
+      "name": "today_trail_leaf_icon",
+      "crop_box_xyxy": [
+        34,
+        627,
+        116,
+        709
+      ],
+      "width": 685,
+      "height": 719,
+      "notes": ""
+    },
+    {
+      "file": "02_navigation_signature_set/journal_book_icon.webp",
+      "board": "component_board_1",
+      "category": "02_navigation_signature_set",
+      "name": "journal_book_icon",
+      "crop_box_xyxy": [
+        133,
+        625,
+        219,
+        711
+      ],
+      "width": 1236,
+      "height": 963,
+      "notes": ""
+    },
+    {
+      "file": "02_navigation_signature_set/capture_leaf_seal_icon.webp",
+      "board": "component_board_1",
+      "category": "02_navigation_signature_set",
+      "name": "capture_leaf_seal_icon",
+      "crop_box_xyxy": [
+        210,
+        603,
+        338,
+        731
+      ],
+      "width": 1202,
+      "height": 1225,
+      "notes": ""
+    },
+    {
+      "file": "02_navigation_signature_set/path_signpost_icon.webp",
+      "board": "component_board_1",
+      "category": "02_navigation_signature_set",
+      "name": "path_signpost_icon",
+      "crop_box_xyxy": [
+        336,
+        625,
+        422,
+        711
+      ],
+      "width": 935,
+      "height": 1344,
+      "notes": ""
+    },
+    {
+      "file": "02_navigation_signature_set/me_profile_icon.webp",
+      "board": "component_board_1",
+      "category": "02_navigation_signature_set",
+      "name": "me_profile_icon",
+      "crop_box_xyxy": [
+        421,
+        625,
+        507,
+        711
+      ],
+      "width": 997,
+      "height": 1126,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/mark_proof_leaf_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "mark_proof_leaf_icon",
+      "crop_box_xyxy": [
+        544,
+        600,
+        640,
+        696
+      ],
+      "width": 938,
+      "height": 1017,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/memory_seal_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "memory_seal_icon",
+      "crop_box_xyxy": [
+        668,
+        600,
+        764,
+        696
+      ],
+      "width": 841,
+      "height": 878,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/backlog_notebook_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "backlog_notebook_icon",
+      "crop_box_xyxy": [
+        790,
+        600,
+        886,
+        696
+      ],
+      "width": 934,
+      "height": 997,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/living_path_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "living_path_icon",
+      "crop_box_xyxy": [
+        909,
+        600,
+        1005,
+        696
+      ],
+      "width": 666,
+      "height": 1331,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/expedition_flag_mountain_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "expedition_flag_mountain_icon",
+      "crop_box_xyxy": [
+        544,
+        740,
+        640,
+        836
+      ],
+      "width": 972,
+      "height": 1017,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/pack_check_bag_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "pack_check_bag_icon",
+      "crop_box_xyxy": [
+        668,
+        740,
+        764,
+        836
+      ],
+      "width": 602,
+      "height": 806,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/private_document_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "private_document_icon",
+      "crop_box_xyxy": [
+        790,
+        740,
+        886,
+        836
+      ],
+      "width": 837,
+      "height": 925,
+      "notes": ""
+    },
+    {
+      "file": "03_entity_signature_set/weekly_coding_report_icon.webp",
+      "board": "component_board_1",
+      "category": "03_entity_signature_set",
+      "name": "weekly_coding_report_icon",
+      "crop_box_xyxy": [
+        909,
+        740,
+        1005,
+        836
+      ],
+      "width": 826,
+      "height": 760,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/planned_seed_star_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "planned_seed_star_icon",
+      "crop_box_xyxy": [
+        39,
+        954,
+        117,
+        1032
+      ],
+      "width": 648,
+      "height": 696,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/done_proof_check_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "done_proof_check_icon",
+      "crop_box_xyxy": [
+        151,
+        954,
+        229,
+        1032
+      ],
+      "width": 818,
+      "height": 816,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/active_seed_dot_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "active_seed_dot_icon",
+      "crop_box_xyxy": [
+        260,
+        954,
+        338,
+        1032
+      ],
+      "width": 499,
+      "height": 500,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/weak_wilted_leaf_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "weak_wilted_leaf_icon",
+      "crop_box_xyxy": [
+        371,
+        954,
+        449,
+        1032
+      ],
+      "width": 592,
+      "height": 560,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/missed_faded_mark_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "missed_faded_mark_icon",
+      "crop_box_xyxy": [
+        39,
+        1093,
+        117,
+        1171
+      ],
+      "width": 649,
+      "height": 667,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/protected_leaf_shield_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "protected_leaf_shield_icon",
+      "crop_box_xyxy": [
+        151,
+        1093,
+        229,
+        1171
+      ],
+      "width": 701,
+      "height": 920,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/upcoming_quiet_calendar_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "upcoming_quiet_calendar_icon",
+      "crop_box_xyxy": [
+        260,
+        1093,
+        338,
+        1171
+      ],
+      "width": 585,
+      "height": 663,
+      "notes": ""
+    },
+    {
+      "file": "04_status_signature_set/in_progress_seed_icon.webp",
+      "board": "component_board_1",
+      "category": "04_status_signature_set",
+      "name": "in_progress_seed_icon",
+      "crop_box_xyxy": [
+        371,
+        1093,
+        449,
+        1171
+      ],
+      "width": 803,
+      "height": 819,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/career_craft_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "career_craft_medallion_icon",
+      "crop_box_xyxy": [
+        550,
+        948,
+        634,
+        1032
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/snag_golf_path_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "snag_golf_path_medallion_icon",
+      "crop_box_xyxy": [
+        674,
+        948,
+        758,
+        1032
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/health_body_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "health_body_medallion_icon",
+      "crop_box_xyxy": [
+        796,
+        948,
+        880,
+        1032
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/family_home_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "family_home_medallion_icon",
+      "crop_box_xyxy": [
+        916,
+        948,
+        1000,
+        1032
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/character_shield_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "character_shield_medallion_icon",
+      "crop_box_xyxy": [
+        550,
+        1087,
+        634,
+        1171
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/golf_craft_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "golf_craft_medallion_icon",
+      "crop_box_xyxy": [
+        674,
+        1087,
+        758,
+        1171
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/culture_romance_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "culture_romance_medallion_icon",
+      "crop_box_xyxy": [
+        796,
+        1087,
+        880,
+        1171
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "05_domain_path_identity_medallions/learning_wisdom_medallion_icon.webp",
+      "board": "component_board_1",
+      "category": "05_domain_path_identity_medallions",
+      "name": "learning_wisdom_medallion_icon",
+      "crop_box_xyxy": [
+        916,
+        1087,
+        1000,
+        1171
+      ],
+      "width": 1254,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "06_result_judgment_seals/trail_result_seal_icon.webp",
+      "board": "component_board_2",
+      "category": "06_result_judgment_seals",
+      "name": "trail_result_seal_icon",
+      "crop_box_xyxy": [
+        18,
+        208,
+        158,
+        360
+      ],
+      "width": 1076,
+      "height": 1038,
+      "notes": ""
+    },
+    {
+      "file": "06_result_judgment_seals/day_closed_shield_seal_icon.webp",
+      "board": "component_board_2",
+      "category": "06_result_judgment_seals",
+      "name": "day_closed_shield_seal_icon",
+      "crop_box_xyxy": [
+        165,
+        205,
+        286,
+        360
+      ],
+      "width": 968,
+      "height": 1145,
+      "notes": ""
+    },
+    {
+      "file": "06_result_judgment_seals/protected_character_seal_icon.webp",
+      "board": "component_board_2",
+      "category": "06_result_judgment_seals",
+      "name": "protected_character_seal_icon",
+      "crop_box_xyxy": [
+        284,
+        205,
+        410,
+        360
+      ],
+      "width": 1244,
+      "height": 1254,
+      "notes": ""
+    },
+    {
+      "file": "06_result_judgment_seals/repair_path_seal_icon.webp",
+      "board": "component_board_2",
+      "category": "06_result_judgment_seals",
+      "name": "repair_path_seal_icon",
+      "crop_box_xyxy": [
+        407,
+        205,
+        520,
+        360
+      ],
+      "width": 1199,
+      "height": 1213,
+      "notes": ""
+    },
+    {
+      "file": "07_health_session_icons/strength_medallion_icon.webp",
+      "board": "component_board_2",
+      "category": "07_health_session_icons",
+      "name": "strength_medallion_icon",
+      "crop_box_xyxy": [
+        507,
+        227,
+        581,
+        301
+      ],
+      "width": 1185,
+      "height": 627,
+      "notes": ""
+    },
+    {
+      "file": "07_health_session_icons/walk_trail_icon.webp",
+      "board": "component_board_2",
+      "category": "07_health_session_icons",
+      "name": "walk_trail_icon",
+      "crop_box_xyxy": [
+        580,
+        227,
+        654,
+        301
+      ],
+      "width": 541,
+      "height": 1007,
+      "notes": ""
+    },
+    {
+      "file": "07_health_session_icons/stretch_leaf_icon.webp",
+      "board": "component_board_2",
+      "category": "07_health_session_icons",
+      "name": "stretch_leaf_icon",
+      "crop_box_xyxy": [
+        656,
+        227,
+        730,
+        301
+      ],
+      "width": 662,
+      "height": 897,
+      "notes": ""
+    },
+    {
+      "file": "07_health_session_icons/session_timer_icon.webp",
+      "board": "component_board_2",
+      "category": "07_health_session_icons",
+      "name": "session_timer_icon",
+      "crop_box_xyxy": [
+        731,
+        227,
+        805,
+        301
+      ],
+      "width": 873,
+      "height": 1067,
+      "notes": ""
+    },
+    {
+      "file": "07_health_session_icons/set_done_proof_icon.webp",
+      "board": "component_board_2",
+      "category": "07_health_session_icons",
+      "name": "set_done_proof_icon",
+      "crop_box_xyxy": [
+        805,
+        227,
+        879,
+        301
+      ],
+      "width": 719,
+      "height": 834,
+      "notes": ""
+    },
+    {
+      "file": "07_health_session_icons/rest_leaf_timer_icon.webp",
+      "board": "component_board_2",
+      "category": "07_health_session_icons",
+      "name": "rest_leaf_timer_icon",
+      "crop_box_xyxy": [
+        879,
+        227,
+        953,
+        301
+      ],
+      "width": 887,
+      "height": 1024,
+      "notes": ""
+    },
+    {
+      "file": "07_health_session_icons/cooldown_leaf_icon.webp",
+      "board": "component_board_2",
+      "category": "07_health_session_icons",
+      "name": "cooldown_leaf_icon",
+      "crop_box_xyxy": [
+        953,
+        227,
+        1027,
+        301
+      ],
+      "width": 975,
+      "height": 1100,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/header_leaf_mark_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "header_leaf_mark_motif",
+      "crop_box_xyxy": [
+        64,
+        520,
+        180,
+        620
+      ],
+      "width": 1394,
+      "height": 2000,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/pressed_leaf_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "pressed_leaf_motif",
+      "crop_box_xyxy": [
+        231,
+        520,
+        342,
+        616
+      ],
+      "width": 996,
+      "height": 1530,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/botanical_sprig_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "botanical_sprig_motif",
+      "crop_box_xyxy": [
+        425,
+        520,
+        575,
+        612
+      ],
+      "width": 2126,
+      "height": 1394,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/section_sprig_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "section_sprig_motif",
+      "crop_box_xyxy": [
+        620,
+        520,
+        798,
+        612
+      ],
+      "width": 1996,
+      "height": 676,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/corner_branch_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "corner_branch_motif",
+      "crop_box_xyxy": [
+        835,
+        520,
+        1010,
+        612
+      ],
+      "width": 2546,
+      "height": 1397,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/wreath_left_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "wreath_left_motif",
+      "crop_box_xyxy": [
+        65,
+        668,
+        180,
+        773
+      ],
+      "width": 1063,
+      "height": 1328,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/wreath_right_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "wreath_right_motif",
+      "crop_box_xyxy": [
+        231,
+        668,
+        342,
+        773
+      ],
+      "width": 1103,
+      "height": 1376,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/wreath_seal_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "wreath_seal_motif",
+      "crop_box_xyxy": [
+        429,
+        666,
+        574,
+        776
+      ],
+      "width": 1235,
+      "height": 1140,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/leaf_vein_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "leaf_vein_motif",
+      "crop_box_xyxy": [
+        666,
+        665,
+        746,
+        775
+      ],
+      "width": 952,
+      "height": 1533,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/seed_dot_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "seed_dot_motif",
+      "crop_box_xyxy": [
+        872,
+        676,
+        970,
+        760
+      ],
+      "width": 1061,
+      "height": 922,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/trail_curve_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "trail_curve_motif",
+      "crop_box_xyxy": [
+        50,
+        820,
+        195,
+        918
+      ],
+      "width": 1208,
+      "height": 1017,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/branch_tick_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "branch_tick_motif",
+      "crop_box_xyxy": [
+        238,
+        820,
+        355,
+        920
+      ],
+      "width": 1715,
+      "height": 1396,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/stamp_ring_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "stamp_ring_motif",
+      "crop_box_xyxy": [
+        445,
+        820,
+        555,
+        922
+      ],
+      "width": 1123,
+      "height": 1150,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/ribbon_bookmark_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "ribbon_bookmark_motif",
+      "crop_box_xyxy": [
+        672,
+        810,
+        740,
+        934
+      ],
+      "width": 583,
+      "height": 1114,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/photo_botanical_overlay_motif.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "photo_botanical_overlay_motif",
+      "crop_box_xyxy": [
+        840,
+        808,
+        1010,
+        920
+      ],
+      "width": 1354,
+      "height": 1024,
+      "notes": ""
+    },
+    {
+      "file": "08_botanical_motif_library/pressed_botanical_header_system_sprig.webp",
+      "board": "component_board_2",
+      "category": "08_botanical_motif_library",
+      "name": "pressed_botanical_header_system_sprig",
+      "crop_box_xyxy": [
+        882,
+        25,
+        1024,
+        120
+      ],
+      "width": 1218,
+      "height": 1020,
+      "notes": "top-right board brand sprig"
+    }
+  ]
+}

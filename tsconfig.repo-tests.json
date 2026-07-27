@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./.tmp/repo-tests",
+    "rootDir": ".",
+    "noEmit": false,
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "types": ["node"]
+  },
+  "include": [
+    "react-native-absolute-fill-object.d.ts",
+    "src/domain/waymark/**/*.ts",
+    "src/db/**/*.ts",
+    "src/lib/**/*.ts",
+    "tests/**/*.test.ts"
+  ],
+  "exclude": [
+    "src/components/**/*",
+    "src/labs/**/*",
+    "src/design-system/**/*",
+    "src/AppRoot.tsx",
+    "src/**/*.tsx"
+  ]
+}

@@ -4,19 +4,47 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "android:dev-build": "eas build -p android --profile development",
+    "android:preview-apk": "eas build -p android --profile preview",
+    "build:android:apk": "eas build --platform android --profile apk-preview",
+    "start:dev-client": "npx expo start --dev-client",
+    "assets:sync:waymark-skins": "node scripts/sync-waymark-skins.mjs",
+    "turso:ensure-schema": "node scripts/turso-ensure-schema.mjs",
+    "test:repo-slice": "tsc -p tsconfig.repo-tests.json && node .tmp/repo-tests/tests/repository-slice.test.js && node .tmp/repo-tests/tests/architecture-guards.test.js && node .tmp/repo-tests/tests/turso-planning-contract.test.js && node .tmp/repo-tests/tests/today-mutation-state.test.js && node .tmp/repo-tests/tests/daily-journal-view-state.test.js && node .tmp/repo-tests/tests/ssot-outbox-mvp.test.js && node .tmp/repo-tests/tests/media-sync-hardening.test.js && node .tmp/repo-tests/tests/restore-before-seed.test.js && node .tmp/repo-tests/tests/weekly-primer-ssot.test.js && node .tmp/repo-tests/tests/turso-weekly-live-intake.test.js && node .tmp/repo-tests/tests/turso-signal-live-intake.test.js && node .tmp/repo-tests/tests/turso-remote-adapter.test.js && node .tmp/repo-tests/tests/turso-sync-service.test.js && node .tmp/repo-tests/tests/turso-all-tables-bootstrap.test.js && node .tmp/repo-tests/tests/turso-planning-sync.test.js && node .tmp/repo-tests/tests/turso-hierarchy-projection-sync.test.js"
   },
   "dependencies": {
-    "expo": "~54.0.33",
-    "expo-status-bar": "~3.0.9",
-    "react": "19.1.0",
-    "react-native": "0.81.5"
+    "@tursodatabase/serverless": "^1.2.3",
+    "expo": "~56.0.8",
+    "expo-asset": "^56.0.15",
+    "expo-audio": "~56.0.11",
+    "expo-auth-session": "~56.0.14",
+    "expo-clipboard": "~56.0.4",
+    "expo-dev-client": "~56.0.18",
+    "expo-document-picker": "~56.0.4",
+    "expo-file-system": "~56.0.7",
+    "expo-image-picker": "~56.0.15",
+    "expo-intent-launcher": "~56.0.4",
+    "expo-notifications": "~56.0.15",
+    "expo-secure-store": "~56.0.4",
+    "expo-sharing": "^56.0.15",
+    "expo-sqlite": "~56.0.4",
+    "expo-status-bar": "~56.0.4",
+    "expo-video": "^56.1.4",
+    "expo-video-thumbnails": "~56.0.3",
+    "expo-web-browser": "~56.0.5",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-image-viewing": "^0.2.2",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-svg": "15.15.4"
   },
   "devDependencies": {
-    "@types/react": "~19.1.0",
-    "typescript": "~5.9.2"
+    "@types/react": "~19.2.14",
+    "sharp": "^0.34.5",
+    "typescript": "~6.0.3"
   },
   "private": true
 }

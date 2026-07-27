@@ -1,0 +1,28 @@
+import groovy.json.JsonSlurper
+
+def credentialsFile = rootProject.file("../credentials.json")
+
+if (credentialsFile.exists()) {
+    def credentials = new JsonSlurper().parse(credentialsFile)
+    def keystore = credentials?.android?.keystore
+
+    if (keystore?.keystorePath && keystore?.keystorePassword && keystore?.keyAlias) {
+        def keystorePath = keystore.keystorePath as String
+        def storeFilePath = file(keystorePath).exists()
+                ? file(keystorePath)
+                : rootProject.file("..").toPath().resolve(keystorePath).toFile()
+
+        android.signingConfigs {
+            release {
+                storeFile storeFilePath
+                storePassword keystore.keystorePassword
+                keyAlias keystore.keyAlias
+                keyPassword keystore.keyPassword ?: keystore.keystorePassword
+            }
+        }
+
+        android.buildTypes.release {
+            signingConfig android.signingConfigs.release
+        }
+    }
+}

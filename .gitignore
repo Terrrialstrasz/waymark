@@ -12,6 +12,8 @@ expo-env.d.ts
 # Native
 .kotlin/
 *.orig.*
+credentials.json
+credentials/
 *.jks
 *.p8
 *.p12
@@ -25,12 +27,22 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
+
+# local build and test scratch
+/.android-local/
+/.gradle-local/
+/.tmp/
+/waymark-*.txt
+/tmp-*.png
+/tmp-*.webp
 
 # macOS
 .DS_Store
 *.pem
 
 # local env files
+.env
 .env*.local
 
 # typescript
@@ -38,4 +50,9 @@ yarn-error.*
 
 # generated native folders
 /ios
-/android
+
+# Android native source is tracked because Waymark ships custom alarm code.
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

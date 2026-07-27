@@ -1,0 +1,107 @@
+export const foundationColors = {
+  bg: {
+    app: "#FAF3E4",
+    paper: "#FFFDF4",
+    paperWarm: "#FFF8EA",
+    paperSoft: "#F1E5CD",
+    sunken: "#EDE0C7",
+    overlay: "rgba(43, 42, 34, 0.32)",
+    disabled: "#E8DECC",
+  },
+  ink: {
+    primary: "#2B2A22",
+    secondary: "#5F5849",
+    tertiary: "#7C725F",
+    disabled: "#A99E8A",
+    inverse: "#FCF3DF",
+    onGold: "#3B2B13",
+    onClay: "#4A2A22",
+    onGreenSoft: "#173D2A",
+  },
+  green: {
+    base: "#43A95D",
+    deep: "#2F7F46",
+    soft: "#EAF7E6",
+  },
+  gold: {
+    base: "#C89A3A",
+    deep: "#A97822",
+    soft: "#F1DDA3",
+  },
+  clay: {
+    base: "#B8795F",
+    soft: "#E8C6B7",
+  },
+  missed: {
+    base: "#C98172",
+    soft: "#F0D1C8",
+  },
+  archive: {
+    blue: "#7893A0",
+  },
+  border: {
+    soft: "#E2D0AE",
+    subtle: "#EBDCC0",
+    active: "#43A95D",
+    protected: "#2F7F46",
+    proof: "#D9AD3F",
+    warning: "#C07C5D",
+    missed: "#D28778",
+    focus: "#43A95D",
+    disabled: "#D7C8AA",
+  },
+  shadow: {
+    paper: "rgba(80, 58, 22, 0.10)",
+    paperMedium: "rgba(80, 58, 22, 0.12)",
+    paperHigh: "rgba(80, 58, 22, 0.16)",
+    green: "rgba(23, 61, 42, 0.14)",
+    none: "transparent",
+  },
+} as const;
+
+export const colors = {
+  background: foundationColors.bg.app,
+  backgroundWarm: foundationColors.bg.paperWarm,
+  surface: foundationColors.bg.paper,
+  surfaceMuted: foundationColors.bg.paperSoft,
+  surfaceTint: foundationColors.green.soft,
+  text: foundationColors.ink.primary,
+  textMuted: foundationColors.ink.secondary,
+  textSoft: foundationColors.ink.tertiary,
+  border: foundationColors.border.soft,
+  borderStrong: foundationColors.border.proof,
+  shadow: foundationColors.shadow.paper,
+  overlay: foundationColors.bg.overlay,
+  primary: foundationColors.green.base,
+  primarySoft: foundationColors.green.soft,
+  gold: foundationColors.gold.base,
+  goldSoft: foundationColors.gold.soft,
+  blue: foundationColors.archive.blue,
+  blueSoft: "#DCE4E8",
+  danger: foundationColors.clay.base,
+  dangerSoft: foundationColors.clay.soft,
+  success: "#5F8A5F",
+  successSoft: foundationColors.green.soft,
+  warning: foundationColors.gold.deep,
+  warningSoft: "#F4E7B8",
+  lavender: "#789D68",
+  lavenderSoft: "#E1EACF",
+  mask: foundationColors.bg.disabled,
+  white: foundationColors.bg.paper,
+  black: foundationColors.ink.primary,
+} as const;
+
+export const pathColors = {
+  career: foundationColors.green.base,
+  snag: foundationColors.green.deep,
+  health: "#5F8A5F",
+  family: foundationColors.gold.base,
+  character: foundationColors.clay.base,
+  golf: foundationColors.green.base,
+  culture: foundationColors.gold.deep,
+} as const;
+
+export const botanical = {
+  leafColor: "#C7D5B8",
+  branchColor: "#D8C39A",
+} as const;

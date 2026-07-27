@@ -64,5 +64,22 @@
     "18_UI_COMPONENT_SYSTEM.md",
     "19_TODAY_COCKPIT_REQUIREMENTS.md",
     "25_BUILD_BACKLOG_AND_ORDER.md"
+  ],
+  "design_resources": [
+    {
+      "name": "Waymark Icon skins",
+      "manifest": "../Waymark Icon skins/manifest.json",
+      "asset_count": 66,
+      "categories": [
+        "01_utility_signature_set",
+        "02_navigation_signature_set",
+        "03_entity_signature_set",
+        "04_status_signature_set",
+        "05_domain_path_identity_medallions",
+        "06_result_judgment_seals",
+        "07_health_session_icons",
+        "08_botanical_motif_library"
+      ]
+    }
   ]
 }

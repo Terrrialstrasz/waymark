@@ -108,6 +108,7 @@ A Mark-producing item appears in Today only if the complete underlying flow work
 |---|---|
 | Simple PlannedMark | PlannedMark action sheet |
 | Body Mark | Health Session Runner |
+| Golf Practice Mark | Golf Practice Session flow; specific SNAG swing titles open Swing and Putting Ladder titles open Putting |
 | Pack Check | PackCheckRun flow |
 | Memory capture | Memory + MediaAsset + Mark flow |
 | Current Expedition | Expedition detail and route/proof |

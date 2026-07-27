@@ -19,6 +19,7 @@ Use this file as standing instructions for Codex or any AI assistant helping bui
 | Build components first | Do not assemble custom screens before the component system exists |
 | Localize page by page | A visible page must be fully localized in selected language |
 | Keep Career/SNAG separate | Different paths, separate statuses, separate expeditions, separate filters |
+| Route UI media through shared rules | UI images/icons must go through the shared image registry and `WaymarkImage`; do not render original assets directly in feature components |
 
 ## AI must not do
 
@@ -34,9 +35,13 @@ Use this file as standing instructions for Codex or any AI assistant helping bui
 | Put day judgment in Mark | Close the Trail owns planned-vs-completed, consumed, anchor deviation |
 | Put checklist details in Mark | PackCheckRun owns checklist completion |
 | Put memory archive rules in Mark | Memory owns archive/media/collections |
-| Build cloud-first | Phone owns the truth |
+| Build cloud-first | Waymark remains local-first at runtime; the Waymark Vault owns logical truth |
 | Build AI runtime dependency | Core app must work without paid AI calls |
 | Add back office/admin/CMS | Explicitly unwanted |
+| Render original uploaded photos in cards/heroes | Always use optimized variants only |
+| Hardcode direct image asset paths inside feature components | Use the image registry or a dedicated asset wrapper |
+| Use large raw images for small icons/cards | Export or generate size-appropriate variants first |
+| Use base64 or remote placeholder image URLs in UI | Keep assets bundled/local and variant-driven |
 
 ## Coding style
 
@@ -48,6 +53,41 @@ Use this file as standing instructions for Codex or any AI assistant helping bui
 - Store `mapVersion` and `labelSnapshot` on user-created records.
 - Use stable IDs and localized labels.
 - Use feature visibility guards for unfinished workflows.
+
+## Executable Today marks
+
+- Today items must route to their real execution flow, not only to generic Mark completion.
+- Workout marks must open the Health Session flow through `interactionKind: "strength_session"`.
+- Golf practice marks must open the Golf Practice flow through `interactionKind: "golf_practice"`, even when weekly imports give each session a specific title such as `SNAG Roller Stroke 7h-5h` or `Putting Ladder Mon 60-180 cm`.
+- Golf practice title detection must stay centralized in `src/lib/waymark/golfPracticeMark.ts`; do not reimplement ad hoc title checks in screens or importers.
+- Weekly timetable import tests should assert executable Today behavior for any new session-like mark, not just mark creation and signal creation.
+
+## Image and icon handling
+
+- Never use large original image files directly inside UI components.
+- Every UI image must resolve through an explicit asset variant rule.
+- Use the shared image registry and `WaymarkImage` abstraction for hero art, logos, icons, path medallions, status seals, botanical motifs, journal photos, memory photos, and expedition media.
+- Original uploaded photos may be stored, but UI must consume optimized variants only.
+- Preserve transparency for icons, seals, logos, and motifs.
+- Flatten non-transparent photos to efficient WebP/AVIF-style assets or equivalent optimized local formats.
+- Prefer eager loading only for critical above-the-fold logo, header, and hero media.
+- Default all below-fold media to lazy or on-demand loading.
+- Do not use heavy blur, backdrop-filter-like effects, oversized shadows, or animated large images in scrolling surfaces.
+- For decorative imagery, keep opacity in tokens/styles instead of baking it into the asset when possible.
+
+### Required variant rules
+
+| Usage | Rule |
+|---|---|
+| Small icon skin | Use SVG when available, otherwise tightly cropped transparent WebP exported at 2x/3x |
+| Path icon | Use `iconMd`/`iconLg`; keep sharp and proportional |
+| Status seal | Use `iconLg` or `sealMd`; no blur effects |
+| Botanical motif | Use optimized decorative transparent asset; lazy unless in first visible shell |
+| Logo mark | Prefer vector source or clean high-res fallback; never blur |
+| Compact card photo | Use `compact` variant around 480px, never full original |
+| Journal / Memory card | Use `card` variant around 720px |
+| Hero image | Use `hero` variant around 1200-1600px |
+| Fullscreen preview | Use `full` variant only on demand |
 
 ## UX tone
 

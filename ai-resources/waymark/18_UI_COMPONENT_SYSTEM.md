@@ -29,6 +29,7 @@ The UI Component Phase establishes:
 | radius | Rounded Waymark card system |
 | shadow | Soft tactile card feel |
 | icon | Path/action/status icons |
+| image | Shared image usage, variants, loading strategy, fallback behavior |
 | state | Completed/postponed/substituted/blocked/missed/private |
 
 ## Primitive components
@@ -46,6 +47,7 @@ The UI Component Phase establishes:
 | WMSectionHeader | Section title | optional action hidden if incomplete |
 | WMCarousel | Horizontal scroll | no clipped text |
 | WMProgressLine | Small progress/status | path/weekly summaries |
+| WaymarkImage | Shared image primitive | usage-based variant selection, loading strategy, object-fit, fallback, decorative mode |
 
 ## Domain components
 
@@ -67,6 +69,33 @@ The UI Component Phase establishes:
 | CaptureOptionCard | Capture | Mark / Memory / Backlog |
 | BacklogItemCard | Me / Weekly Coding | raw idea, status, conversion |
 | WeeklyReportCard | Me | weekly summary/path balance |
+
+## Shared image system
+
+All UI imagery must go through the shared image layer.
+
+| Asset group | Required handling |
+|---|---|
+| Utility / nav / entity icons | Use shared registry entry and icon usage config |
+| Path medallions / path icons | Use `pathIcon` usage through `WaymarkImage` or wrapper |
+| Status seals | Use `statusSeal` usage through `WaymarkImage` or wrapper |
+| Botanical motifs | Use decorative lazy-loaded motif assets with token-driven opacity |
+| Logo marks | Use `logo` usage; eager only when above the fold |
+| Compact card photos | Use `compactCardBackground` usage; absolute image with simple gradient overlay if needed |
+| Journal / Memory media | Use `journalCard` or `detailImage` usage; never original photo files |
+| Hero images | Use `hero` usage with stable aspect ratio and light readability scrim only when needed |
+| Fullscreen preview | Use `fullscreenPreview` on demand only |
+
+### Component rules for images
+
+| Rule | Requirement |
+|---|---|
+| No raw asset paths in feature components | Reference image asset IDs or pass through `WaymarkImage` |
+| No direct original uploads in UI | Photo cards and heroes must use optimized variants only |
+| No CSS-like heavy visual effects | Avoid heavy blur, backdrop-filter-like effects, and large shadows on photo-heavy lists |
+| Preserve readability | Photo overlays should use simple gradients, not blur layers |
+| Preserve sharpness | Icons and seals use `contain`; heroes and photo cards use `cover` |
+| Preserve layout stability | Hero and card media should reserve space and avoid layout shift |
 
 ## State variants
 

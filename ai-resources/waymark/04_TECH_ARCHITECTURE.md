@@ -2,7 +2,7 @@
 
 ## Architecture principle
 
-> Phone owns the truth. Cloud protects the truth. Code defines the Map. User data records the Marks.
+> Waymark Vault owns logical truth. Local SQLite is the working copy. Cloud storage protects and reconciles under the Vault contract. Code defines the Map. User data records the Marks.
 
 ## Recommended stack
 
@@ -15,8 +15,8 @@
 | Local files | Expo FileSystem |
 | Secure storage | SecureStore / native keychain |
 | Notifications | Expo Notifications later |
-| Cloud backup later | Supabase |
-| Cloud data later | Encrypted payloads only |
+| Structured reconciliation later | Turso, governed by the Waymark Vault contract |
+| Media blob storage later | Google Drive, governed by the Waymark Vault contract |
 
 ## Module structure
 
@@ -68,6 +68,10 @@ src/
     privacy-service.ts
     backup-service.ts
     app-gateway-service.ts
+
+  assets/
+    imageRegistry.ts
+    imageUsage.ts
 
   components/
     primitives/
@@ -164,3 +168,45 @@ Create record locally
 ```
 
 No plaintext diary, memory, or personal proof should be stored in cloud backup.
+
+## Shared image asset architecture
+
+All visual assets must flow through a single shared image system.
+
+```text
+Bundled asset or stored source
+-> image registry entry
+-> usage config
+-> WaymarkImage primitive
+-> feature/domain component
+```
+
+### Required image modules
+
+| Module | Responsibility |
+|---|---|
+| `src/assets/imageRegistry.ts` | Canonical registry for icons, path icons, status seals, botanical motifs, logos, heroes, journal, memory, and expedition media |
+| `src/assets/imageUsage.ts` | Maps UI usage to preferred variant, object fit, loading strategy, max width, and fallback behavior |
+| `src/components/primitives/WaymarkImage.tsx` | Shared rendering guardrail with variant selection, fallback, and development warnings |
+| `src/components/primitives/WaymarkSkinAsset.tsx` | Skin/icon wrapper built on top of `WaymarkImage` |
+| `src/components/primitives/WaymarkLogoMark.tsx` | Logo wrapper built on top of `WaymarkImage` |
+
+### Asset handling rules
+
+| Rule | Requirement |
+|---|---|
+| No direct originals in UI | Original uploaded media may be stored but must not be rendered directly in cards, heroes, lists, or previews |
+| Variant-driven rendering | Photo-like assets use `thumb`, `compact`, `card`, `hero`, `large`, `full` variants |
+| Transparent asset handling | Icons, logos, seals, and motifs preserve transparency and stay tightly cropped |
+| Bounded hero sizes | Hero assets should resolve to 1200-1600px variants; fullscreen previews cap at 2048px |
+| Card safety | Compact cards must not use assets wider than 720px |
+| Wrapper-only access | Screens and domain components should consume image asset IDs or `WaymarkImage`, not raw file paths |
+
+### Development safeguards
+
+- Warn if a direct source looks like an original upload path.
+- Warn if a compact card uses an image wider than 720px.
+- Warn if a hero uses an image wider than 2048px.
+- Warn if an icon asset appears to have excessive transparent padding.
+- Warn if alt text is missing unless the asset is decorative.
+- Warn if a large image is marked priority outside above-the-fold contexts.

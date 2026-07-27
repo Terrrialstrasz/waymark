@@ -1,0 +1,805 @@
+import { SQLiteDatabase } from "expo-sqlite";
+import { SCHEMA_MIGRATIONS_TABLE, WAYMARK_TABLES, WaymarkTableName } from "./constants";
+import { MIGRATIONS } from "./migrations/manifest";
+
+type TableInfoRow = {
+  name: string;
+  notnull: number;
+};
+
+type SqliteMasterRow = {
+  name: string;
+  sql: string | null;
+};
+
+type RequiredIndexSpec = {
+  name: string;
+  sqlIncludes: string[];
+};
+
+export type SchemaVerificationReport = {
+  databaseOpened: boolean;
+  expectedSchemaVersion: number;
+  appliedSchemaVersion: number;
+  appliedMigrationCount: number;
+  missingTables: string[];
+  missingColumns: Record<string, string[]>;
+  missingNotNullColumns: Record<string, string[]>;
+  missingIndexes: string[];
+  ok: boolean;
+};
+
+const REQUIRED_COLUMNS: Record<WaymarkTableName, readonly string[]> = {
+  app_db_metadata: [
+    "db_instance_id",
+    "vault_id",
+    "device_id",
+    "client_type",
+    "schema_version",
+    "map_version",
+    "seed_version",
+    "restore_state",
+    "created_at",
+    "last_migration_at",
+    "last_seed_at",
+    "last_cloud_sync_at",
+  ],
+  vaults: ["id", "name", "created_at", "updated_at", "status"],
+  devices: ["id", "vault_id", "client_type", "device_name", "created_at", "last_seen_at"],
+  sync_state: [
+    "vault_id",
+    "device_id",
+    "last_cloud_revision",
+    "last_successful_sync_at",
+    "sync_mode",
+    "protection_status",
+  ],
+  sync_outbox: [
+    "id",
+    "vault_id",
+    "device_id",
+    "db_instance_id",
+    "entity_type",
+    "entity_id",
+    "operation",
+    "idempotency_key",
+    "local_revision",
+    "base_remote_revision",
+    "payload_json",
+    "payload_schema_version",
+    "status",
+    "retry_count",
+    "last_error",
+    "created_at",
+    "updated_at",
+    "synced_at",
+  ],
+  sync_tombstones: ["entity_type", "entity_id", "vault_id", "device_id", "deleted_at", "local_revision", "reason"],
+  user_profiles: ["id", "display_name", "locale", "timezone", "created_at", "updated_at"],
+  app_settings: ["id", "user_id", "key", "value_json", "created_at", "updated_at", "deleted_at", "sync_status", "local_revision"],
+  paths: [
+    "id",
+    "user_id",
+    "name",
+    "subtitle",
+    "description",
+    "color_token",
+    "hero_media_asset_id",
+    "icon_key",
+    "sort_order",
+    "is_active",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  expeditions: [
+    "id",
+    "user_id",
+    "path_id",
+    "title",
+    "purpose",
+    "status",
+    "start_date",
+    "target_date",
+    "completed_at",
+    "hero_media_asset_id",
+    "sort_order",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  milestones: [
+    "id",
+    "user_id",
+    "expedition_id",
+    "title",
+    "description",
+    "status",
+    "start_date",
+    "target_date",
+    "completed_at",
+    "sort_order",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  trail_days: [
+    "id",
+    "user_id",
+    "local_date",
+    "status",
+    "anchor_path_id",
+    "closed_at",
+    "reopened_at",
+    "close_summary",
+    "tomorrow_first_step",
+    "character_result",
+    "planned_mark_count",
+    "completed_mark_count",
+    "skipped_mark_count",
+    "memory_count",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  reflection_entries: ["id", "user_id", "trail_day_id", "cluster", "text", "order_index", "created_at", "updated_at"],
+  mark_templates: [
+    "id",
+    "user_id",
+    "path_id",
+    "title",
+    "description",
+    "template_type",
+    "recurrence_type",
+    "recurrence_rule_json",
+    "default_duration_min",
+    "default_signal_rule_json",
+    "is_active",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  mark_instances: [
+    "id",
+    "user_id",
+    "path_id",
+    "trail_day_id",
+    "template_id",
+    "milestone_id",
+    "title",
+    "description",
+    "origin",
+    "status",
+    "scheduled_start_at",
+    "scheduled_end_at",
+    "due_at",
+    "completed_at",
+    "skipped_at",
+    "expired_at",
+    "proof_note",
+    "completion_summary",
+    "substituted_by_mark_id",
+    "rescheduled_to_mark_id",
+    "generation_key",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  mark_instance_details: [
+    "mark_instance_id",
+    "primer_snapshot",
+    "pre_action_comment",
+    "post_action_feedback",
+    "user_edited_at",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  memories: [
+    "id",
+    "user_id",
+    "trail_day_id",
+    "path_id",
+    "title",
+    "body",
+    "captured_at",
+    "mood",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  backlog_items: [
+    "id",
+    "user_id",
+    "path_id",
+    "title",
+    "description",
+    "item_type",
+    "horizon",
+    "status",
+    "source",
+    "converted_mark_instance_id",
+    "converted_pack_check_template_id",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  week_plans: [
+    "id",
+    "user_id",
+    "week_start_date",
+    "week_end_date",
+    "status",
+    "summary",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  week_plan_items: [
+    "id",
+    "user_id",
+    "week_plan_id",
+    "backlog_item_id",
+    "status",
+    "local_date",
+    "start_time",
+    "end_time",
+    "title",
+    "path_id",
+    "template_id",
+    "expedition_id",
+    "milestone_id",
+    "expedition_context",
+    "milestone_context",
+    "description",
+    "note",
+    "origin",
+    "block_key",
+    "deterministic_import_key",
+    "import_batch_id",
+    "created_mark_instance_id",
+    "sort_order",
+    "order_index",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  pack_check_templates: [
+    "id",
+    "user_id",
+    "path_id",
+    "title",
+    "description",
+    "template_type",
+    "default_timing_rule_json",
+    "is_active",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  pack_check_item_templates: [
+    "id",
+    "user_id",
+    "pack_check_template_id",
+    "label",
+    "description",
+    "is_required",
+    "sort_order",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  mark_pack_check_rules: [
+    "id",
+    "user_id",
+    "mark_template_id",
+    "pack_check_template_id",
+    "available_offset_min",
+    "due_offset_min",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  pack_check_instances: [
+    "id",
+    "user_id",
+    "template_id",
+    "trail_day_id",
+    "target_mark_instance_id",
+    "title",
+    "description",
+    "status",
+    "available_from",
+    "due_at",
+    "completed_at",
+    "skipped_at",
+    "generation_key",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  pack_check_item_instances: [
+    "id",
+    "user_id",
+    "pack_check_instance_id",
+    "template_item_id",
+    "label",
+    "is_required",
+    "is_checked",
+    "checked_at",
+    "sort_order",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  signals: [
+    "id",
+    "user_id",
+    "target_type",
+    "target_id",
+    "scheduled_at",
+    "status",
+    "ringing_started_at",
+    "snoozed_until",
+    "resolved_at",
+    "dismissed_at",
+    "expired_at",
+    "cancelled_at",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  mark_dependencies: [
+    "id",
+    "user_id",
+    "dependent_mark_instance_id",
+    "dependency_type",
+    "required_entity_type",
+    "required_entity_id",
+    "is_required",
+    "status",
+    "satisfied_at",
+    "waived_at",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  media_assets: [
+    "id",
+    "user_id",
+    "owner_type",
+    "owner_id",
+    "kind",
+    "asset_type",
+    "mime_type",
+    "local_uri",
+    "thumbnail_uri",
+    "remote_uri",
+    "width",
+    "height",
+    "duration_ms",
+    "size_bytes",
+    "backup_status",
+    "sort_index",
+    "captured_at",
+    "local_date",
+    "daily_batch_id",
+    "upload_status",
+    "local_status",
+    "source_cleanup_status",
+    "original_picker_uri",
+    "library_asset_id",
+    "drive_file_id",
+    "drive_folder_id",
+    "drive_root_folder_id",
+    "drive_web_view_link",
+    "drive_web_content_link",
+    "drive_mime_type",
+    "drive_size_bytes",
+    "drive_md5_checksum",
+    "content_hash",
+    "content_hash_algorithm",
+    "thumbnail_drive_file_id",
+    "thumbnail_content_hash",
+    "thumbnail_content_hash_algorithm",
+    "uploaded_at",
+    "source_deleted_at",
+    "local_deleted_at",
+    "last_sync_error",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  daily_media_upload_batches: [
+    "id",
+    "user_id",
+    "local_date",
+    "timezone",
+    "status",
+    "media_count",
+    "uploaded_count",
+    "failed_count",
+    "run_sequence",
+    "lock_owner",
+    "lock_acquired_at",
+    "lock_expires_at",
+    "sealed_at",
+    "started_at",
+    "completed_at",
+    "last_error",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  exercise_definitions: [
+    "id",
+    "user_id",
+    "name",
+    "category",
+    "measurement_type",
+    "default_unit",
+    "equipment",
+    "is_system",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  workout_routine_templates: [
+    "id",
+    "user_id",
+    "mark_template_id",
+    "title",
+    "routine_type",
+    "description",
+    "estimated_duration_min",
+    "is_active",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  routine_exercise_templates: [
+    "id",
+    "user_id",
+    "workout_routine_template_id",
+    "exercise_definition_id",
+    "phase",
+    "order_index",
+    "target_sets",
+    "target_reps",
+    "target_duration_sec",
+    "target_distance_m",
+    "target_steps",
+    "rest_duration_sec",
+    "progression_policy_json",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  workout_session_instances: [
+    "id",
+    "user_id",
+    "mark_instance_id",
+    "routine_template_id",
+    "status",
+    "phase",
+    "started_at",
+    "completed_at",
+    "current_exercise_snapshot_id",
+    "current_set_number",
+    "notes",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  session_exercise_snapshots: [
+    "id",
+    "user_id",
+    "workout_session_instance_id",
+    "routine_exercise_template_id",
+    "exercise_definition_id",
+    "exercise_name_snapshot",
+    "phase",
+    "order_index",
+    "target_type",
+    "target_load_kg",
+    "target_sets",
+    "target_reps",
+    "target_duration_sec",
+    "target_distance_m",
+    "target_steps",
+    "was_overridden",
+    "status",
+    "started_at",
+    "completed_at",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  exercise_set_logs: [
+    "id",
+    "user_id",
+    "session_exercise_snapshot_id",
+    "set_number",
+    "actual_load_kg",
+    "actual_reps",
+    "actual_duration_sec",
+    "actual_distance_m",
+    "actual_steps",
+    "completed",
+    "failed_reason",
+    "metadata_json",
+    "started_at",
+    "completed_at",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+  exercise_progress_states: [
+    "id",
+    "user_id",
+    "exercise_definition_id",
+    "current_load_kg",
+    "current_reps",
+    "current_duration_sec",
+    "current_distance_m",
+    "current_steps",
+    "success_count_since_progression",
+    "last_session_result",
+    "last_progressed_at",
+    "manual_override",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "sync_status",
+    "local_revision",
+  ],
+};
+
+const REQUIRED_NOT_NULL_COLUMNS: Record<string, readonly string[]> = {
+  app_db_metadata: [
+    "db_instance_id",
+    "vault_id",
+    "device_id",
+    "client_type",
+    "schema_version",
+    "map_version",
+    "seed_version",
+    "restore_state",
+    "created_at",
+    "last_migration_at",
+  ],
+  vaults: ["id", "created_at", "updated_at", "status"],
+  devices: ["id", "vault_id", "client_type", "created_at"],
+  sync_state: ["vault_id", "device_id", "last_cloud_revision", "sync_mode", "protection_status"],
+  sync_outbox: [
+    "id",
+    "vault_id",
+    "device_id",
+    "db_instance_id",
+    "entity_type",
+    "entity_id",
+    "operation",
+    "idempotency_key",
+    "local_revision",
+    "payload_json",
+    "payload_schema_version",
+    "status",
+    "retry_count",
+    "created_at",
+    "updated_at",
+  ],
+  sync_tombstones: ["entity_type", "entity_id", "vault_id", "device_id", "deleted_at", "local_revision"],
+  user_profiles: ["id", "locale", "timezone", "created_at", "updated_at"],
+  mark_instance_details: ["mark_instance_id", "created_at", "updated_at", "sync_status", "local_revision"],
+  mark_instances: ["id", "user_id", "path_id", "trail_day_id", "title", "origin", "status", "created_at", "updated_at"],
+  pack_check_instances: ["id", "user_id", "trail_day_id", "title", "status", "created_at", "updated_at"],
+  mark_dependencies: [
+    "id",
+    "user_id",
+    "dependent_mark_instance_id",
+    "dependency_type",
+    "required_entity_type",
+    "required_entity_id",
+    "is_required",
+    "status",
+    "created_at",
+    "updated_at",
+  ],
+  signals: ["id", "user_id", "target_type", "target_id", "scheduled_at", "status", "created_at", "updated_at"],
+  workout_session_instances: ["id", "user_id", "mark_instance_id", "routine_template_id", "status", "phase", "created_at", "updated_at"],
+  exercise_progress_states: ["id", "user_id", "exercise_definition_id", "success_count_since_progression", "manual_override", "created_at", "updated_at"],
+  daily_media_upload_batches: ["id", "user_id", "local_date", "timezone", "status", "created_at", "updated_at"],
+};
+
+const REQUIRED_INDEXES: readonly RequiredIndexSpec[] = [
+  {
+    name: "ux_mark_instances_generation_key_active",
+    sqlIncludes: ["ON mark_instances(user_id, generation_key)", "WHERE generation_key IS NOT NULL AND deleted_at IS NULL"],
+  },
+  {
+    name: "ux_pack_check_instances_generation_key_active",
+    sqlIncludes: ["ON pack_check_instances(user_id, generation_key)", "WHERE generation_key IS NOT NULL AND deleted_at IS NULL"],
+  },
+  {
+    name: "ux_workout_sessions_mark_active",
+    sqlIncludes: ["ON workout_session_instances(mark_instance_id)", "WHERE deleted_at IS NULL"],
+  },
+  {
+    name: "ux_exercise_progress_states_user_exercise_active",
+    sqlIncludes: ["ON exercise_progress_states(user_id, exercise_definition_id)", "WHERE deleted_at IS NULL"],
+  },
+  {
+    name: "ux_week_plan_items_import_key_active",
+    sqlIncludes: ["ON week_plan_items(user_id, deterministic_import_key)", "WHERE deterministic_import_key IS NOT NULL AND deleted_at IS NULL"],
+  },
+  {
+    name: "idx_devices_vault_client",
+    sqlIncludes: ["ON devices(vault_id, client_type)"],
+  },
+  {
+    name: "idx_app_db_metadata_vault_device",
+    sqlIncludes: ["ON app_db_metadata(vault_id, device_id)"],
+  },
+  {
+    name: "idx_daily_media_batches_catchup",
+    sqlIncludes: ["ON daily_media_upload_batches(user_id, local_date, status, deleted_at)"],
+  },
+  {
+    name: "idx_sync_outbox_pending",
+    sqlIncludes: ["ON sync_outbox(vault_id, status, created_at)"],
+  },
+  {
+    name: "idx_sync_outbox_entity",
+    sqlIncludes: ["ON sync_outbox(entity_type, entity_id, status)"],
+  },
+  {
+    name: "ux_media_assets_user_content_owner_active",
+    sqlIncludes: ["ON media_assets(user_id, content_hash, owner_type, owner_id)", "WHERE content_hash IS NOT NULL AND deleted_at IS NULL"],
+  },
+  {
+    name: "idx_media_assets_drive_file",
+    sqlIncludes: ["ON media_assets(drive_file_id, deleted_at)", "WHERE drive_file_id IS NOT NULL"],
+  },
+];
+
+async function getExistingTableNamesAsync(db: SQLiteDatabase): Promise<Set<string>> {
+  const rows = await db.getAllAsync<SqliteMasterRow>(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
+  );
+  return new Set(rows.map((row) => row.name));
+}
+
+async function getColumnInfoAsync(db: SQLiteDatabase, tableName: string): Promise<TableInfoRow[]> {
+  return db.getAllAsync<TableInfoRow>(`PRAGMA table_info(${tableName});`);
+}
+
+async function getIndexDefinitionsAsync(db: SQLiteDatabase): Promise<Map<string, string>> {
+  const rows = await db.getAllAsync<SqliteMasterRow>(
+    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%';",
+  );
+
+  return new Map(rows.map((row) => [row.name, row.sql ?? ""]));
+}
+
+export async function getAppliedSchemaVersionAsync(db: SQLiteDatabase): Promise<{
+  version: number;
+  appliedMigrationCount: number;
+}> {
+  const rows = await db.getAllAsync<{ version: number }>(
+    `SELECT version FROM ${SCHEMA_MIGRATIONS_TABLE} ORDER BY version ASC;`,
+  );
+  return {
+    version: rows.length > 0 ? rows[rows.length - 1].version : 0,
+    appliedMigrationCount: rows.length,
+  };
+}
+
+export async function verifyWaymarkSchemaAsync(db: SQLiteDatabase): Promise<SchemaVerificationReport> {
+  const existingTables = await getExistingTableNamesAsync(db);
+  const existingIndexes = await getIndexDefinitionsAsync(db);
+  const expectedSchemaVersion = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+  const { version: appliedSchemaVersion, appliedMigrationCount } = await getAppliedSchemaVersionAsync(db);
+
+  const missingTables: string[] = [];
+  const missingColumns: Record<string, string[]> = {};
+  const missingNotNullColumns: Record<string, string[]> = {};
+
+  for (const tableName of Object.values(WAYMARK_TABLES)) {
+    if (!existingTables.has(tableName)) {
+      missingTables.push(tableName);
+      missingColumns[tableName] = [...REQUIRED_COLUMNS[tableName]];
+      if (REQUIRED_NOT_NULL_COLUMNS[tableName]) {
+        missingNotNullColumns[tableName] = [...REQUIRED_NOT_NULL_COLUMNS[tableName]];
+      }
+      continue;
+    }
+
+    const tableInfo = await getColumnInfoAsync(db, tableName);
+    const columnsByName = new Map(tableInfo.map((column) => [column.name, column]));
+
+    const tableMissingColumns = REQUIRED_COLUMNS[tableName].filter((column) => !columnsByName.has(column));
+    if (tableMissingColumns.length > 0) {
+      missingColumns[tableName] = tableMissingColumns;
+    }
+
+    const requiredNotNull = REQUIRED_NOT_NULL_COLUMNS[tableName] ?? [];
+    const tableMissingNotNull = requiredNotNull.filter((column) => columnsByName.get(column)?.notnull !== 1);
+    if (tableMissingNotNull.length > 0) {
+      missingNotNullColumns[tableName] = tableMissingNotNull;
+    }
+  }
+
+  const missingIndexes = REQUIRED_INDEXES.filter(({ name, sqlIncludes }) => {
+    const sql = existingIndexes.get(name) ?? "";
+    return !sqlIncludes.every((snippet) => sql.includes(snippet));
+  }).map(({ name }) => name);
+
+  return {
+    databaseOpened: true,
+    expectedSchemaVersion,
+    appliedSchemaVersion,
+    appliedMigrationCount,
+    missingTables,
+    missingColumns,
+    missingNotNullColumns,
+    missingIndexes,
+    ok:
+      missingTables.length === 0 &&
+      Object.keys(missingColumns).length === 0 &&
+      Object.keys(missingNotNullColumns).length === 0 &&
+      missingIndexes.length === 0 &&
+      appliedSchemaVersion === expectedSchemaVersion,
+  };
+}

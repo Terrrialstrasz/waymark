@@ -1,0 +1,63 @@
+CREATE TABLE IF NOT EXISTS paths (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  subtitle TEXT,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL,
+  color_token TEXT,
+  icon_key TEXT,
+  sort_order INTEGER NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  hero_media_asset_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  sync_status TEXT NOT NULL DEFAULT 'local',
+  local_revision INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS expeditions (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  path_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  purpose TEXT,
+  description TEXT,
+  status TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  start_date TEXT,
+  target_date TEXT,
+  started_at INTEGER,
+  target_end_at INTEGER,
+  completed_at INTEGER,
+  hero_media_asset_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  sync_status TEXT NOT NULL DEFAULT 'local',
+  local_revision INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(path_id) REFERENCES paths(id)
+);
+
+CREATE TABLE IF NOT EXISTS milestones (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL,
+  expedition_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL,
+  start_date TEXT,
+  target_date TEXT,
+  sort_order INTEGER NOT NULL,
+  order_index INTEGER NOT NULL,
+  completed_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  sync_status TEXT NOT NULL DEFAULT 'local',
+  local_revision INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(expedition_id) REFERENCES expeditions(id)
+);

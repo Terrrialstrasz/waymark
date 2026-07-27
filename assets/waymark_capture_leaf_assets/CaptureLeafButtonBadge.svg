@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" role="img" aria-label="Waymark Capture Leaf Button badge">
+  <title>Waymark Capture Leaf Button badge</title>
+  <defs>
+    <linearGradient id="outerRing" x1="8" y1="4" x2="36" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="var(--wm-capture-leaf-outer-ring-light, #FFF8EA)"/>
+      <stop offset="0.55" stop-color="var(--wm-capture-leaf-outer-ring, #F4EEDC)"/>
+      <stop offset="1" stop-color="var(--wm-capture-leaf-outer-ring-shadow, #E6D8BC)"/>
+    </linearGradient>
+    <radialGradient id="innerHighlight" cx="33%" cy="24%" r="42%">
+      <stop offset="0" stop-color="rgba(255,255,255,.24)"/>
+      <stop offset="1" stop-color="rgba(255,255,255,0)"/>
+    </radialGradient>
+    <linearGradient id="innerDisc" x1="12" y1="9" x2="32" y2="35" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="var(--wm-capture-leaf-enamel-surface, #11712E)"/>
+      <stop offset="1" stop-color="var(--wm-capture-leaf-enamel-deep, #075B24)"/>
+    </linearGradient>
+    <filter id="badgeShadow" x="-35%" y="-25%" width="170%" height="170%">
+      <feDropShadow dx="0" dy="7" stdDeviation="8" flood-color="rgb(48 57 39)" flood-opacity=".20"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgb(48 57 39)" flood-opacity=".14"/>
+    </filter>
+  </defs>
+
+  <circle cx="22" cy="22" r="21" fill="url(#outerRing)" stroke="var(--wm-capture-leaf-outer-edge, #D8C9A9)" stroke-width="1" filter="url(#badgeShadow)"/>
+  <circle cx="22" cy="22" r="19" fill="none" stroke="rgba(116,92,45,.13)" stroke-width="1"/>
+  <circle cx="22" cy="22" r="17" fill="url(#innerDisc)"/>
+  <circle cx="22" cy="22" r="17" fill="url(#innerHighlight)"/>
+  <circle cx="22" cy="22" r="14.2" fill="none" stroke="var(--wm-capture-leaf-dash-ring, rgba(248,244,232,.72))" stroke-width="1.1" stroke-dasharray="2.4 1.7" stroke-linecap="round"/>
+  <circle cx="22" cy="22" r="16" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1"/>
+
+  <g transform="translate(9.2 8.6) scale(1.1) rotate(-14 12 12)" color="var(--wm-capture-leaf-icon, #F8F4E8)">
+    <path
+      d="M4.9 17.9C5.4 11.7 10.7 6.6 19.3 4.7C18.6 13.5 13.4 18.8 6.3 18.8C5.7 18.8 5.2 18.5 4.9 17.9Z"
+      fill="currentColor"
+    />
+    <path
+      d="M6.5 17.3C9.6 13.2 13.5 9.5 18.4 6.4"
+      fill="none"
+      stroke="var(--wm-capture-leaf-vein, #11712E)"
+      stroke-width="1.45"
+      stroke-linecap="round"
+      opacity=".82"
+    />
+    <path
+      d="M9.2 14.4C8.4 13 7.9 11.8 7.7 10.8M11.3 12.1C10.9 10.5 10.7 9.2 10.8 8.2M13.4 10.3C13.3 8.9 13.4 7.8 13.8 6.9M11.1 12.4C12.8 12.6 14.1 13.1 15.3 13.9M13.2 10.4C14.7 10.4 16 10.7 17.1 11.3"
+      fill="none"
+      stroke="var(--wm-capture-leaf-vein, #11712E)"
+      stroke-width="1.05"
+      stroke-linecap="round"
+      opacity=".70"
+    />
+  </g>
+</svg>

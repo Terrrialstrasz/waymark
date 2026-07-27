@@ -1,0 +1,44 @@
+{
+  "captureLeaf": {
+    "color": {
+      "outerRingLight": "#FFF8EA",
+      "outerRing": "#F4EEDC",
+      "outerRingShadow": "#E6D8BC",
+      "outerRingEdge": "#D8C9A9",
+      "enamelSurface": "#11712E",
+      "enamelDeep": "#075B24",
+      "enamelPressed": "#06481D",
+      "enamelActive": "#18813A",
+      "enamelDisabled": "#9BAA96",
+      "icon": "#F8F4E8",
+      "vein": "#11712E",
+      "dashRing": "rgba(248,244,232,.72)",
+      "focusRing": "rgba(185,154,91,.34)"
+    },
+    "size": {
+      "visual": "44px",
+      "tapTarget": "56px",
+      "navSlotMin": "64px",
+      "navSlotPreferred": "72px",
+      "iconScale": "0.78 of inner disc",
+      "rimInsetFormula": "max(4px, round(size * 0.105))"
+    },
+    "radius": {
+      "badge": "999px",
+      "tapTarget": "999px"
+    },
+    "shadow": {
+      "idle": "0 7px 16px rgba(48,57,39,.20), 0 2px 4px rgba(48,57,39,.14), inset 0 1px 0 rgba(255,255,255,.18)",
+      "pressed": "0 2px 5px rgba(48,57,39,.16), inset 0 3px 6px rgba(0,0,0,.26)",
+      "active": "0 9px 20px rgba(48,57,39,.22), 0 0 0 3px rgba(185,154,91,.26), inset 0 1px 0 rgba(255,255,255,.20)",
+      "disabled": "none"
+    },
+    "motion": {
+      "pressDuration": "100ms",
+      "releaseDuration": "150ms",
+      "easing": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+      "pressedScale": "0.975",
+      "pressedTranslateY": "1px"
+    }
+  }
+}

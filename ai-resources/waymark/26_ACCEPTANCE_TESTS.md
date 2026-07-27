@@ -52,6 +52,7 @@ A feature is not accepted when a screen appears. It is accepted when the workflo
 | Tap Substitute | Substitute Mark created |
 | Block item | Block reason saved |
 | Close Trail reads status | Completed/postponed/substituted/missed counted correctly |
+| Close Trail supervising substitution | Substitute mark counts as planned, substituted supervising original is excluded, and one original supervising mark remains in denominator if all supervising marks were substituted |
 
 ## Backlog and Weekly Coding tests
 

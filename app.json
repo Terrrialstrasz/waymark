@@ -1,30 +1,44 @@
 {
   "expo": {
-    "name": "waymark",
+    "name": "Waymark",
     "slug": "waymark",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/skins/generated/logo/app-config/waymark-icon-square.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
+      "package": "com.waymark.lifeos",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/skins/generated/logo/app-config/waymark-adaptive-foreground-square.png",
+        "monochromeImage": "./assets/skins/generated/logo/app-config/waymark-adaptive-monochrome-square.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/skins/generated/logo/waymark-stone-stamp-primary/iconSm.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/strength_rest_bell.wav"
+          ]
+        }
+      ],
+      "expo-audio",
+      "expo-status-bar"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9f24dc53-a9a7-44a5-9190-e577f6156c37"
+      }
     }
   }
 }

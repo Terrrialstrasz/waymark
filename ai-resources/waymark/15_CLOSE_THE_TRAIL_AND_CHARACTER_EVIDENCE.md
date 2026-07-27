@@ -79,6 +79,17 @@ It is not just a Mark. It creates a `DailyClosure` and then generates an extra C
 | suggestedResult | System suggestion |
 | confirmedResult | User confirmation |
 
+## Supervising substitution counting
+
+Close the Trail uses an effective planned mark denominator for supervising substitutions:
+
+- If a `supervising_block` planned mark is `substituted`, the original supervising mark is removed from the planned mark denominator.
+- The same-day substitute mark created by the Substitute action is counted as a planned mark.
+- A completed substitute mark counts toward completed planned marks.
+- If all supervising marks in a day are substituted, keep exactly one original supervising mark in the denominator so the day still contains at least one original supervising mark.
+- The retained original supervising mark keeps its real status; if it is `substituted`, it does not count as completed.
+- Unrelated quick captures, including discipline proof marks, do not become planned marks.
+
 ## Day statuses
 
 | Status | Meaning |
