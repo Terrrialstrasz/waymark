@@ -88,6 +88,7 @@ import { importWeeklyTimetable20260706To0712 } from "../src/app/weeklyTimetableI
 import { importBreakfastMarks20260713To0719, importWeeklyTimetable20260713To0719 } from "../src/app/weeklyTimetableImport20260713";
 import { importWeekendHospitalCarePatch20260725To0726, importWeeklyTimetable20260720To0726 } from "../src/app/weeklyTimetableImport20260720";
 import { importWeeklyTimetable20260727To0802 } from "../src/app/weeklyTimetableImport20260727";
+import { importWeeklyTimetable20260803To0809 } from "../src/app/weeklyTimetableImport20260803";
 import { clearPackCheckDetail, deleteMarkDetail, deleteMemoryDetail, deletePackCheckDetail } from "../src/lib/waymark/shellAppAdapters";
 import {
   buildCharacterPathProofItems,
@@ -9673,6 +9674,154 @@ const tests: TestCase[] = [
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-27T11:30:00.000Z" && item.title?.includes("Chipping 3 m")), true);
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-31T18:00:00.000Z" && item.title?.includes("23 putts")), true);
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-08-01T07:30:00.000Z" && item.title === "Mua hoa tặng vợ sáng thứ 7"), true);
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Weekly timetable import 2026-08-03 creates routed workout, golf, course, and EPGA marks without duplicates",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        await harness.repos.userProfiles.getOrCreateLocalUserProfile({
+          userId: "user_1",
+          locale: "en-US",
+          timezone: "UTC",
+          weekStartsOn: 1,
+        });
+        await bootstrapFullConfig(harness);
+
+        const user = await harness.repos.userProfiles.getUserProfileById("user_1");
+        assert.ok(user);
+        const services = {
+          repositories: harness.repos,
+          user: user!,
+          markEngine: createMarkEngine(harness.repos),
+          packCheckEngine: createPackCheckEngine(harness.repos),
+          dependencyEngine: createDefaultDependencyEngine(harness.repos),
+          signalEngine: createSignalEngine(harness.repos),
+          closeTrailEngine: createCloseTrailEngine(harness.repos),
+          strengthProgressionService: createStrengthProgressionService(harness.repos),
+          strengthSessionEngine: createStrengthSessionEngine(
+            harness.repos,
+            createStrengthProgressionService(harness.repos),
+          ),
+        };
+        const first = await importWeeklyTimetable20260803To0809(services, "user_1", "UTC");
+        const second = await importWeeklyTimetable20260803To0809(services, "user_1", "UTC");
+
+        assert.equal(first.items.length, 85);
+        assert.equal(first.results.length, 85);
+        assert.equal(first.packChecks.length, 28);
+        assert.equal(first.signals.length, 58);
+        assert.equal(second.items.length, 85);
+        assert.equal(second.results.length, 85);
+        assert.equal(second.signals.length, 58);
+        assert.equal(new Set(second.signals.map((signal) => signal.id)).size, 58);
+
+        const marksByDate = await listMarksByDateMap(harness, "user_1", [
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-08",
+          "2026-08-09",
+        ]);
+        const allMarks = Object.values(marksByDate).flat();
+        assert.equal(allMarks.length, 85);
+        assert.equal(allMarks.every((mark) => mark.origin === MarkInstanceOrigin.WeeklyPlanned), true);
+        assert.equal(allMarks.every((mark) => mark.dueAt === undefined), true);
+        assert.equal(allMarks.filter((mark) => mark.title === "Weight In").length, 7);
+        assert.equal(allMarks.filter((mark) => mark.title === "Post Workout Routine").length, 7);
+        assert.equal(allMarks.filter((mark) => mark.title.startsWith("Học AI n8n")).length, 16);
+        assert.equal(allMarks.filter((mark) => mark.title === "Supervising + Daily DCH + tổng hợp n8n").length, 4);
+        assert.equal(allMarks.filter((mark) => mark.title.includes("Chipping")).length, 7);
+        assert.equal(allMarks.filter((mark) => mark.title.includes("23 putts")).length, 7);
+        assert.equal(allMarks.filter((mark) => mark.title.startsWith("EPGA golf")).length, 4);
+        assert.equal(allMarks.some((mark) => mark.title === "Waymark Planning" && mark.scheduledStartAt === "2026-08-07T21:00:00.000"), true);
+
+        const focusTitles = new Set([
+          "Test biểu mẫu QLSD Thẻ",
+          "Hoàn thiện slide Sub Account LNH",
+          "Planning SCH và rà checklist golive",
+          "Supervising BIDV + Daily DCH",
+          "Thiết kế báo cáo và đối soát DCH",
+          "Supervising + Daily DCH + tổng hợp n8n",
+        ]);
+        const ninetyMinuteMarks = allMarks.filter((mark) => focusTitles.has(mark.title) || mark.title.startsWith("Học AI n8n"));
+        assert.equal(ninetyMinuteMarks.length, 25);
+        assert.equal(ninetyMinuteMarks.every((mark) => {
+          assert.ok(mark.scheduledStartAt);
+          assert.ok(mark.scheduledEndAt);
+          return new Date(mark.scheduledEndAt!).getTime() - new Date(mark.scheduledStartAt!).getTime() === 90 * 60 * 1000;
+        }), true);
+
+        const healthPath = await getPathByTitle(harness, "user_1", "Health & Body");
+        assert.ok(healthPath);
+        const workoutTemplateTitles = await Promise.all(
+          ["Workout A1", "Workout B", "Workout Walk", "Workout A2"].map(async (title) => {
+            const mark = allMarks.find((item) => item.pathId === healthPath!.id && item.title === title);
+            assert.ok(mark, `Missing ${title}`);
+            assert.ok(mark!.templateId, `${title} should keep templateId for Strength Session routing`);
+            const template = await harness.repos.marks.getMarkTemplateById(mark!.templateId!);
+            const metadata = await getMarkTemplateSeedMetadata(harness.repos.appSettings, "user_1", mark!.templateId!);
+            assert.equal(metadata?.blockType, "workout_block");
+            return template?.title;
+          }),
+        );
+        assert.deepEqual(workoutTemplateTitles, ["Workout A1", "Workout B", "Workout Walk", "Workout A2"]);
+
+        const chippingMarks = allMarks.filter((mark) => mark.title.includes("Chipping"));
+        assert.equal(chippingMarks.some((mark) => mark.title.includes("Chipping 3-5-7 m")), false);
+        for (const mark of chippingMarks) {
+          const plan = buildChippingShortGamePracticePlanForMarkTitle(mark.title);
+          assert.equal(plan?.reduce((total, set) => total + set.reps, 0), 24);
+          assert.equal(plan?.length, 3);
+          assert.equal(resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title), "putting");
+        }
+        assert.deepEqual(
+          chippingMarks.map((mark) => mark.title.match(/Chipping ([357]) m/)?.[1]).filter(Boolean),
+          ["3", "3", "5", "5", "7", "7", "3"],
+        );
+
+        const puttingMarks = allMarks.filter((mark) => mark.title.includes("23 putts"));
+        for (const mark of puttingMarks) {
+          const plan = buildPuttingShortGamePracticePlanForMarkTitle(mark.title);
+          assert.equal(plan?.reduce((total, set) => total + set.reps, 0), 23);
+          assert.deepEqual(plan?.map((set) => `${set.distanceLabel}:${set.reps}`), ["60 cm:3", "90 cm:1", "120 cm:2", "150 cm:2", "180 cm:15"]);
+          assert.equal(resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title), "putting");
+        }
+
+        const saturdayMarks = marksByDate["2026-08-08"] ?? [];
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Chơi ở nhà, chuẩn bị đi VCCA"), true);
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Tham quan Festival Mỹ thuật Trẻ tại VCCA"), true);
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Mua hoa tặng vợ" && mark.scheduledStartAt === "2026-08-08T07:30:00.000"), true);
+        const sundayMarks = marksByDate["2026-08-09"] ?? [];
+        assert.equal(sundayMarks.filter((mark) => mark.title.startsWith("EPGA golf")).length, 4);
+        assert.equal(sundayMarks.every((mark) => !mark.title.startsWith("EPGA golf") || resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) === null), true);
+
+        const scheduled = await harness.repos.signals.listSignalsByStatus([SignalStatus.Scheduled], { limit: 100 });
+        assert.equal(scheduled.items.length, 58);
+        assert.equal(scheduled.items.filter((signal) => signal.targetType === SignalTargetType.MarkInstance).length, 30);
+        assert.equal(scheduled.items.filter((signal) => signal.targetType === SignalTargetType.PackCheckInstance).length, 28);
+
+        const mondayToday = await loadTodayData(services, "en", { now: new Date("2026-08-03T12:15:00.000Z") });
+        const workoutA1 = mondayToday.marks.find((mark) => mark.title.en === "Workout A1");
+        const chipping = mondayToday.marks.find((mark) => mark.title.en.includes("Chipping 3 m"));
+        const putting = mondayToday.marks.find((mark) => mark.title.en.includes("23 putts"));
+        assert.equal(workoutA1?.interactionKind, "strength_session");
+        assert.equal(workoutA1?.actionSheet?.primaryActionLabel?.en, "Start Workout");
+        assert.equal(chipping?.interactionKind, "golf_practice");
+        assert.equal(chipping?.actionSheet?.primaryActionLabel?.en, "Start Practice");
+        assert.equal(putting?.interactionKind, "golf_practice");
+        assert.equal(putting?.actionSheet?.primaryActionLabel?.en, "Start Practice");
+
+        const sundayToday = await loadTodayData(services, "en", { now: new Date("2026-08-09T08:30:00.000Z") });
+        const epga = sundayToday.marks.find((mark) => mark.title.en === "EPGA golf — buổi sáng 1");
+        assert.ok(epga);
+        assert.equal(epga?.interactionKind, "default");
       } finally {
         harness.close();
       }

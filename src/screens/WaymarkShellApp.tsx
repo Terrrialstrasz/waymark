@@ -47,6 +47,7 @@ import {
   importWeekendHospitalCarePatch20260725To0726,
   importWeeklyTimetable20260720To0726,
   importWeeklyTimetable20260727To0802,
+  importWeeklyTimetable20260803To0809,
   importDevJournalMemoriesFromExportFixture,
   repairWorkoutDatabase,
   openWaymarkAlarmNotificationSettings,
@@ -1113,6 +1114,33 @@ export function WaymarkShellApp() {
         );
       } catch (error) {
         console.error("[WaymarkWeeklyTimetable20260727] Import failed", error);
+        Alert.alert(
+          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
+          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
+        );
+      }
+    })();
+  };
+
+  const handleImportWeeklyTimetable20260803 = () => {
+    void (async () => {
+      try {
+        const report = await importWeeklyTimetable20260803To0809(app, app.user.id, app.user.timezone);
+        refreshLoadedShellData();
+        Alert.alert(
+          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
+          locale === "vi"
+            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.packChecks.length} pack checks va ${report.signals.length} signals cho tuan 2026-08-03 den 2026-08-09. Hierarchy: link ${report.hierarchyLinks.linked}, bo trong ${report.hierarchyLinks.skipped.length}.`
+            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/kept ${report.packChecks.length} pack checks plus ${report.signals.length} signals for the week of 2026-08-03 to 2026-08-09. Hierarchy: linked ${report.hierarchyLinks.linked}, left blank ${report.hierarchyLinks.skipped.length}.`,
+          [
+            {
+              text: "OK",
+              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
+            },
+          ],
+        );
+      } catch (error) {
+        console.error("[WaymarkWeeklyTimetable20260803] Import failed", error);
         Alert.alert(
           locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
           error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
@@ -3332,6 +3360,16 @@ export function WaymarkShellApp() {
                       ? "Nhap/cap nhat lich tuan vao week plans, planned marks va signals."
                       : "Import and update weekly schedules into week plans, planned marks, and signals.",
                   rows: [
+                    {
+                      id: "prod-import-weekly-timetable-20260803",
+                      title: locale === "vi" ? "Import Weekly Timetable 03/08" : "Import Weekly Timetable 08/03",
+                      subtitle:
+                        locale === "vi"
+                          ? "Import lich 03/08-09/08: 85 Planned Marks, workout/golf dung flow, n8n tach tung block."
+                          : "Import the 2026-08-03 to 2026-08-09 plan: 85 Planned Marks, routed workout/golf flows, and separate n8n blocks.",
+                      icon: "entity.mark" as const,
+                      onPress: handleImportWeeklyTimetable20260803,
+                    },
                     {
                       id: "prod-import-weekly-timetable-20260727",
                       title: locale === "vi" ? "Import Weekly Timetable 27/07" : "Import Weekly Timetable 07/27",

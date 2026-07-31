@@ -28,4 +28,5 @@ export * from "./weeklyTimetableImport20260706";
 export * from "./weeklyTimetableImport20260713";
 export * from "./weeklyTimetableImport20260720";
 export * from "./weeklyTimetableImport20260727";
+export * from "./weeklyTimetableImport20260803";
 export * from "./waymarkSignalAlarm";
