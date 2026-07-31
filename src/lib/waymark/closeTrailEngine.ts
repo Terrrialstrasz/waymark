@@ -32,6 +32,7 @@ const CLOSE_TRAIL_MINUTE = 30;
 
 const RESOLVED_MARK_STATUSES = new Set<MarkInstanceStatus>([
   MarkInstanceStatus.Completed,
+  MarkInstanceStatus.PartiallyCompleted,
   MarkInstanceStatus.Skipped,
   MarkInstanceStatus.Rescheduled,
   MarkInstanceStatus.Substituted,
@@ -123,6 +124,7 @@ type CloseTrailSummaryCounts = Pick<
   CloseTrailSummary,
   | "plannedCount"
   | "completedCount"
+  | "partiallyCompletedCount"
   | "skippedCount"
   | "rescheduledCount"
   | "substitutedCount"
@@ -137,6 +139,7 @@ function buildCloseTrailSummaryCounts(marksWithMetadata: MarkWithMetadata[]): Cl
   const effectivePlannedMarkIds = new Set<string>();
   const substitutedSupervisingOriginalIds: string[] = [];
   let completedCount = 0;
+  let partiallyCompletedCount = 0;
   let skippedCount = 0;
   let rescheduledCount = 0;
   let substitutedCount = 0;
@@ -208,14 +211,18 @@ function buildCloseTrailSummaryCounts(marksWithMetadata: MarkWithMetadata[]): Cl
 
   for (const markId of effectivePlannedMarkIds) {
     const mark = markById.get(markId);
-    if (mark?.status === MarkInstanceStatus.Completed) {
+    if (mark?.status === MarkInstanceStatus.Completed || mark?.status === MarkInstanceStatus.PartiallyCompleted) {
       completedCount += 1;
+      if (mark.status === MarkInstanceStatus.PartiallyCompleted) {
+        partiallyCompletedCount += 1;
+      }
     }
   }
 
   return {
     plannedCount: effectivePlannedMarkIds.size,
     completedCount,
+    partiallyCompletedCount,
     skippedCount,
     rescheduledCount,
     substitutedCount,
@@ -312,6 +319,8 @@ function formatMarkStatusLabel(status: MarkInstanceStatus) {
       return "Active";
     case MarkInstanceStatus.Completed:
       return "Completed";
+    case MarkInstanceStatus.PartiallyCompleted:
+      return "Partial complete";
     case MarkInstanceStatus.Skipped:
       return "Skipped";
     case MarkInstanceStatus.Rescheduled:
@@ -450,6 +459,7 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
       localDate: trailDay.date,
       plannedCount: counts.plannedCount,
       completedCount: counts.completedCount,
+      partiallyCompletedCount: counts.partiallyCompletedCount,
       skippedCount: counts.skippedCount,
       rescheduledCount: counts.rescheduledCount,
       substitutedCount: counts.substitutedCount,
@@ -770,6 +780,7 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
       localDate: trailDay.date,
       plannedCount: counts.plannedCount,
       completedCount: counts.completedCount,
+      partiallyCompletedCount: counts.partiallyCompletedCount,
       skippedCount: counts.skippedCount,
       rescheduledCount: counts.rescheduledCount,
       substitutedCount: counts.substitutedCount,
@@ -857,6 +868,7 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
     );
     const outcomeCounts = {
       completed: summary.completedCount,
+      partiallyCompleted: summary.partiallyCompletedCount,
       substituted: summary.substitutedCount,
       skipped: summary.skippedCount,
       moved: summary.rescheduledCount,
@@ -864,11 +876,14 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
     };
     const plannedMarkOutcomeSentence = [
       `${formatCountLabel(outcomeCounts.completed, "mark completed", "marks completed")}.`,
+      outcomeCounts.partiallyCompleted > 0 ?
+        `${formatCountLabel(outcomeCounts.partiallyCompleted, "partial workout", "partial workouts")}.`
+      : undefined,
       `${formatCountLabel(outcomeCounts.moved, "moved")}.`,
       `${formatCountLabel(outcomeCounts.skipped, "skipped")}.`,
       `${formatCountLabel(outcomeCounts.substituted, "substituted")}.`,
       `${outcomeCounts.unresolved === 1 ? "1 mark needs repair." : `${outcomeCounts.unresolved} marks need repair.`}`,
-    ].join(" ");
+    ].filter(Boolean).join(" ");
     const tomorrowFirstStep = await this.getTomorrowFirstStepPreview(repos, trailDay);
 
     return {

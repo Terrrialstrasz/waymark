@@ -1,4 +1,5 @@
 import type { MarkInstance } from "../../domain/waymark";
+import { MarkInstanceStatus } from "../../domain/waymark/enums";
 import type { DisciplineProof } from "./disciplineProofStore";
 import type { MarkMetadata } from "./markMetadataStore";
 
@@ -85,7 +86,7 @@ export function projectCharacterFromRecords(input: {
       continue;
     }
 
-    if (mark.status === "completed" && metadata?.countsAsPathProof !== false) {
+    if ((mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted) && metadata?.countsAsPathProof !== false) {
       keptCount += 1;
       completedMarkCount += 1;
       proofEvents.push({

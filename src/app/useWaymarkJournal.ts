@@ -210,14 +210,14 @@ export function useWaymarkJournal(locale: Locale, options: { enabled?: boolean }
         const recentRows = dayPayloads
           .filter(
             (payload) =>
-              payload.marks.some(({ mark }) => mark.status === MarkInstanceStatus.Completed) ||
+              payload.marks.some(({ mark }) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted) ||
               payload.memories.length > 0 ||
               payload.disciplineProofs.length > 0 ||
               payload.trailDay.status === TrailDayStatus.Closed,
           )
           .sort((left, right) => right.trailDay.date.localeCompare(left.trailDay.date))
           .map((payload) => {
-            const markCount = payload.marks.filter(({ mark }) => mark.status === MarkInstanceStatus.Completed).length;
+            const markCount = payload.marks.filter(({ mark }) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length;
             const memoryCount = payload.memories.length;
             const chips = [
               markCount > 0
@@ -340,7 +340,7 @@ export function useWaymarkJournal(locale: Locale, options: { enabled?: boolean }
                   trailDayId: payload.trailDay.id,
                   journalEntries: projected.entries.length,
                   memoryEntries: payload.memories.length,
-                  completedMarks: payload.marks.filter(({ mark }) => mark.status === MarkInstanceStatus.Completed).length,
+                  completedMarks: payload.marks.filter(({ mark }) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length,
                   hasClosedTrail: payload.trailDay.status === TrailDayStatus.Closed,
                 },
               } satisfies DailyJournalData,
@@ -722,7 +722,7 @@ async function loadDailyJournalData(input: {
       trailDayId: input.trailDay.id,
       journalEntries: projected.entries.length,
       memoryEntries: memoriesWithMedia.length,
-      completedMarks: marksWithMetadata.filter(({ mark }) => mark.status === MarkInstanceStatus.Completed).length,
+      completedMarks: marksWithMetadata.filter(({ mark }) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length,
       hasClosedTrail: input.trailDay.status === TrailDayStatus.Closed,
     },
   };

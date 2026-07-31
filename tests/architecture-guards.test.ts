@@ -192,7 +192,7 @@ function run() {
   const mvpContract = fs.readFileSync(mvpContractPath, "utf8");
   assert.match(mvpContract, /Turso outbound upload is batch-driven, not real-time\./, "SSOT MVP contract must forbid realtime outbound Turso upload.");
   assert.match(mvpContract, /Every canonical Waymark table must be pushed to Turso eventually\./, "SSOT MVP contract must require eventual Turso push for every canonical table.");
-  assert.match(mvpContract, /- `week_plans`\n- `week_plan_items`/, "SSOT MVP contract must include weekly timetable in outbound sync scope.");
+  assert.match(mvpContract, /- `week_plans`\r?\n- `week_plan_items`/, "SSOT MVP contract must include weekly timetable in outbound sync scope.");
   assert.match(mvpContract, /\| `week_plans` \| editable_remote \| yes \|/, "SSOT MVP contract must mark week_plans remote-editable.");
   assert.match(mvpContract, /\| `week_plan_items` \| editable_remote \| yes \|/, "SSOT MVP contract must mark week_plan_items remote-editable.");
   assert.match(mvpContract, /\| `signals` \| editable_remote \| yes \|/, "SSOT MVP contract must mark signals remote-editable.");

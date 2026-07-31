@@ -24,6 +24,7 @@ import type {
   GolfWorkoutType,
   SaveGolfPracticeLogInput,
 } from "../../types/golfPractice";
+import { buildPuttingShortGamePracticePlanForMarkTitle } from "./golfPracticeMark";
 
 type GolfLogMetadata =
   | {
@@ -106,8 +107,11 @@ async function requireGolfRoutine(
   repositories: WaymarkRepositories,
   pathId: EntityId,
   workoutType: GolfWorkoutType,
+  markTitle?: string,
 ): Promise<WorkoutRoutineTemplate> {
-  const titles = workoutType === "putting" ? ["Golf Practice Short Game", "Golf Practice Putting"] : ["Golf Practice Swing"];
+  const titles =
+    workoutType === "putting" ? resolveShortGameRoutineTitles(markTitle)
+    : ["Golf Practice Swing"];
   const routine = (await repositories.strength.listRoutinesByPath(pathId)).find(
     (item) => item.isActive && item.routineType === WorkoutRoutineType.GolfPractice && titles.includes(item.title),
   );
@@ -115,6 +119,26 @@ async function requireGolfRoutine(
     throw new Error(`${titles[0]} routine is not available.`);
   }
   return routine;
+}
+
+function resolveShortGameRoutineTitles(markTitle?: string) {
+  const normalized = (markTitle ?? "").toLowerCase();
+  if (normalized.includes("chipping 3-5-7")) {
+    return ["Golf Practice Chipping 3-5-7 m", "Golf Practice Short Game", "Golf Practice Putting"];
+  }
+  if (normalized.includes("chipping 3 m")) {
+    return ["Golf Practice Chipping 3 m", "Golf Practice Short Game", "Golf Practice Putting"];
+  }
+  if (normalized.includes("chipping 5 m")) {
+    return ["Golf Practice Chipping 5 m", "Golf Practice Short Game", "Golf Practice Putting"];
+  }
+  if (normalized.includes("chipping 7 m")) {
+    return ["Golf Practice Chipping 7 m", "Golf Practice Short Game", "Golf Practice Putting"];
+  }
+  if (buildPuttingShortGamePracticePlanForMarkTitle(markTitle ?? "")) {
+    return ["Golf Practice Putting 23 Putts", "Golf Practice Short Game", "Golf Practice Putting"];
+  }
+  return ["Golf Practice Putting 23 Putts", "Golf Practice Short Game", "Golf Practice Putting"];
 }
 
 function buildSessionNotes(input: SaveGolfPracticeLogInput): string {
@@ -323,7 +347,7 @@ export async function saveGolfPracticeLog(
     throw new Error("Golf Practice mark does not belong to the current user.");
   }
   const pathId = existingMark?.pathId ?? (await requireGolfPathId(repositories, userId));
-  const routine = await requireGolfRoutine(repositories, pathId, input.workoutType);
+  const routine = await requireGolfRoutine(repositories, pathId, input.workoutType, existingMark?.title);
   const trailDay = await repositories.trailDays.getOrCreateTrailDay(userId, completedAt.slice(0, 10));
   const title = input.workoutType === "putting" ? "Golf Practice Short Game" : "Golf Practice Swing";
 
@@ -393,6 +417,15 @@ function isGolfLogMetadata(value: unknown): value is GolfLogMetadata {
   return Boolean(value && typeof value === "object" && "kind" in value && String((value as { kind?: unknown }).kind).startsWith("golf_"));
 }
 
+function parsePuttingDistanceCm(label: string): number | null {
+  const match = label.match(/^([0-9]+)\s*cm$/i);
+  if (!match) {
+    return null;
+  }
+  const distance = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(distance) ? distance : null;
+}
+
 export async function loadGolfPracticeHistory(
   repositories: WaymarkRepositories,
   userId: EntityId,
@@ -438,6 +471,15 @@ export async function loadGolfPracticeHistory(
           current.hits += metadata.hits;
           current.reps += metadata.reps;
           putting.set(metadata.distanceCm, current);
+        }
+        if (metadata.kind === "golf_short_game") {
+          const distanceCm = parsePuttingDistanceCm(metadata.distanceLabel);
+          if (distanceCm) {
+            const current = putting.get(distanceCm) ?? { hits: 0, reps: 0 };
+            current.hits += metadata.hits;
+            current.reps += metadata.reps;
+            putting.set(distanceCm, current);
+          }
         }
         if (metadata.kind === "golf_swing" && metadata.practiceMode === "distance" && metadata.distancesYards?.length) {
           const key = `${metadata.club}:${metadata.shotType}`;

@@ -28,7 +28,7 @@ function mapExpeditionDetail(
   locale: Locale,
 ): ExpeditionDetailItem {
   const allMarks = milestones.flatMap((milestone) => marksByMilestoneId.get(milestone.id) ?? []);
-  const completedMarks = allMarks.filter((mark) => mark.status === MarkInstanceStatus.Completed).length;
+  const completedMarks = allMarks.filter((mark) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length;
   const totalMarks = allMarks.length;
   const completedMilestones = milestones.filter((milestone) => milestone.status === MilestoneStatus.Completed).length;
   const totalMilestones = milestones.length;
@@ -82,7 +82,7 @@ function mapMilestoneDetail(
         : milestone.status === MilestoneStatus.Active
           ? "inProgress"
           : "upcoming",
-    completedMarks: marks.filter((mark) => mark.status === MarkInstanceStatus.Completed).length,
+    completedMarks: marks.filter((mark) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length,
     totalMarks: marks.length,
     plannedMarks: marks.map((mark) => ({
       id: mark.id,
@@ -119,6 +119,8 @@ function mapExpeditionStatus(status: ExpeditionStatus): ExpeditionDetailItem["st
 function mapPlannedMarkStatus(status: MarkInstanceStatus) {
   switch (status) {
     case MarkInstanceStatus.Completed:
+      return "done";
+    case MarkInstanceStatus.PartiallyCompleted:
       return "done";
     case MarkInstanceStatus.Expired:
       return "missed";

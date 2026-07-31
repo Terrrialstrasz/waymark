@@ -79,13 +79,21 @@ export type AuthoritativeWorkoutRoutineRepairResult = {
   }[];
 };
 
+export const GOLF_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS = [
+  "golf_practice_putting_routine",
+  "golf_practice_chipping_3m_routine",
+  "golf_practice_chipping_5m_routine",
+  "golf_practice_chipping_7m_routine",
+  "golf_practice_chipping_3_5_7m_routine",
+] as const;
+
 export async function repairAuthoritativeWorkoutRoutines(
   context: BootstrapContext,
   config: WaymarkMapConfig,
+  sourceSeedIds: readonly string[] = DEFAULT_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS,
 ): Promise<AuthoritativeWorkoutRoutineRepairResult> {
-  const selectedConfigs = (config.workoutRoutines ?? []).filter((routine) =>
-    AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS.has(routine.sourceSeedId),
-  );
+  const selectedSeedIds = new Set(sourceSeedIds);
+  const selectedConfigs = (config.workoutRoutines ?? []).filter((routine) => selectedSeedIds.has(routine.sourceSeedId));
 
   return context.repositories.transaction.runInTransaction(async (repositories) => {
     const repairContext: BootstrapContext = {
@@ -909,7 +917,15 @@ async function rebuildSeedWorkoutRoutine(
   return existing ? "updated" : "created";
 }
 
-const AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS = new Set(["health_day_a_routine", "health_day_b_routine"]);
+const DEFAULT_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS = [
+  "health_day_a_routine",
+  "health_day_b_routine",
+] as const;
+
+const AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS = new Set<string>([
+  ...DEFAULT_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS,
+  ...GOLF_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS,
+]);
 
 type WorkoutRoutineExerciseSignature = {
   id: string;

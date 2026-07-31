@@ -9,6 +9,11 @@ import {
 import type { SignalEngine } from "../domain/waymark/services";
 import { importWeeklyTimetable, type WeeklyTimetableImportReport, type WeeklyTimetableImportSlotInput } from "../lib/waymark";
 import { setMarkTemplateSeedMetadata } from "../lib/waymark/markTemplateSeedStore";
+import { WAYMARK_MAP_CONFIG } from "../waymark-map";
+import {
+  GOLF_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS,
+  repairAuthoritativeWorkoutRoutines,
+} from "../waymark-map/bootstrap";
 import { findSeedRecordBySource } from "../waymark-map/seedRegistry";
 import { buildZonedDateTime } from "./waymarkUi";
 
@@ -234,6 +239,7 @@ export async function importWeeklyTimetable20260727To0802(
 ): Promise<WeeklyTimetable20260727ImportReport> {
   const repos = services.repositories;
   const catalog = await resolveWeeklyCatalogIds(repos, userId);
+  await repairAuthoritativeWorkoutRoutines({ repositories: repos, userId }, WAYMARK_MAP_CONFIG, GOLF_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS);
   await ensurePostWorkoutRoutineTemplate(repos, userId, catalog.pathFamily, catalog.expeditionFamily);
   const items = buildWeeklyTimetable20260727To0802(catalog);
   const report = await importWeeklyTimetable(repos, {

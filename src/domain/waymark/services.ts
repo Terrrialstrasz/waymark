@@ -39,6 +39,14 @@ export interface CompleteMarkInstanceInput {
   force?: boolean;
 }
 
+export interface PartiallyCompleteMarkInstanceInput {
+  markInstanceId: EntityId;
+  completedAt?: ISODateTimeString;
+  proofNote?: string;
+  completionSummary?: string;
+  mediaAssetIds?: EntityId[];
+}
+
 export interface SkipMarkInstanceInput {
   markInstanceId: EntityId;
   skippedAt?: ISODateTimeString;
@@ -103,6 +111,7 @@ export interface SubstituteMarkInstanceResult {
 export interface MarkEngine {
   canTransitionMarkStatus(from: MarkInstanceStatus, to: MarkInstanceStatus): boolean;
   completeMarkInstance(input: CompleteMarkInstanceInput): Promise<MarkInstance>;
+  partiallyCompleteMarkInstance(input: PartiallyCompleteMarkInstanceInput): Promise<MarkInstance>;
   skipMarkInstance(input: SkipMarkInstanceInput): Promise<MarkInstance>;
   rescheduleMarkInstance(input: RescheduleMarkInstanceInput): Promise<RescheduleMarkInstanceResult>;
   substituteMarkInstance(input: SubstituteMarkInstanceInput): Promise<SubstituteMarkInstanceResult>;
@@ -328,6 +337,7 @@ export interface CloseTrailSummary {
   localDate: LocalDateString;
   plannedCount: number;
   completedCount: number;
+  partiallyCompletedCount: number;
   skippedCount: number;
   rescheduledCount: number;
   substitutedCount: number;
@@ -445,6 +455,7 @@ export interface CloseTrailCharacterJudgment {
 
 export interface CloseTrailPlannedMarkOutcomeCounts {
   completed: number;
+  partiallyCompleted: number;
   substituted: number;
   skipped: number;
   moved: number;
@@ -620,6 +631,24 @@ export interface AbandonWorkoutSessionInput {
   note?: string;
 }
 
+export interface EndWorkoutSessionInput {
+  workoutSessionInstanceId: EntityId;
+  endedAt?: ISODateTimeString;
+  note?: string;
+  proofNote?: string;
+  completionSummary?: string;
+  mediaAssetIds?: EntityId[];
+}
+
+export interface EndWorkoutSessionResult {
+  session: WorkoutSessionInstance;
+  mark?: MarkInstance;
+  disposition: "abandoned" | "partially_completed";
+  completedMainExerciseCount: number;
+  requiredCompletedMainExerciseCount: number;
+  progressionUpdates: ExerciseProgressState[];
+}
+
 export interface ResetWorkoutSessionInput {
   workoutSessionInstanceId: EntityId;
   resetAt?: ISODateTimeString;
@@ -687,6 +716,7 @@ export interface StrengthSessionEngine {
   enterCooldown(input: EnterCooldownInput): Promise<WorkoutSessionInstance>;
   completeCooldown(input: CompleteCooldownInput): Promise<WorkoutSessionInstance>;
   completeWorkoutSession(input: CompleteWorkoutSessionInput): Promise<CompleteWorkoutSessionResult>;
+  endWorkoutSession(input: EndWorkoutSessionInput): Promise<EndWorkoutSessionResult>;
   abandonWorkoutSession(input: AbandonWorkoutSessionInput): Promise<WorkoutSessionInstance>;
   resetWorkoutSession(input: ResetWorkoutSessionInput): Promise<WorkoutSessionInstance>;
   overrideSessionExerciseTarget(input: OverrideSessionExerciseTargetInput): Promise<SessionExerciseSnapshot>;

@@ -33,6 +33,7 @@ export enum MarkInstanceStatus {
   Blocked = "blocked",
   Active = "active",
   Completed = "completed",
+  PartiallyCompleted = "partially_completed",
   Skipped = "skipped",
   Rescheduled = "rescheduled",
   Substituted = "substituted",
@@ -176,6 +177,7 @@ export enum WorkoutSessionStatus {
   Resting = "resting",
   Cooldown = "cooldown",
   Completed = "completed",
+  PartiallyCompleted = "partially_completed",
   Abandoned = "abandoned",
 }
 

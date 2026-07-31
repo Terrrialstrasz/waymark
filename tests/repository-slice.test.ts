@@ -69,6 +69,7 @@ import {
   createDisciplineProof,
   createStrengthProgressionService,
   createStrengthSessionEngine,
+  evaluateWorkoutEndDisposition,
   getWorkoutCycleStep,
   projectCharacterFromRecords,
   RUNTIME_AUTO_GENERATE_PLANNED_MARKS_KEY,
@@ -76,7 +77,11 @@ import {
   repairAuthoritativeWorkoutRoutines,
   resolveAnchorPathIdForDate,
 } from "../src/lib/waymark";
-import { buildChippingShortGamePracticePlanForMarkTitle, resolveGolfPracticeWorkoutTypeForMarkTitle } from "../src/lib/waymark/golfPracticeMark";
+import {
+  buildChippingShortGamePracticePlanForMarkTitle,
+  buildPuttingShortGamePracticePlanForMarkTitle,
+  resolveGolfPracticeWorkoutTypeForMarkTitle,
+} from "../src/lib/waymark/golfPracticeMark";
 import { importWeeklyTimetable20260622To0628 } from "../src/app/weeklyTimetableImport20260622";
 import { importWeeklyTimetable20260629To0705, importWeeklyTimetable202607020305Patch } from "../src/app/weeklyTimetableImport20260629";
 import { importWeeklyTimetable20260706To0712 } from "../src/app/weeklyTimetableImport20260706";
@@ -3701,6 +3706,33 @@ const tests: TestCase[] = [
           "Walk Day",
           "Day A1 Strength",
         ],
+      );
+    },
+  },
+  {
+    name: "StrengthEngine end-session disposition requires the first two main exercises",
+    run: async () => {
+      const snapshot = (orderIndex: number, status: SessionExerciseStatus, phase = WorkoutExercisePhase.Strength) => ({
+        id: `snapshot-${orderIndex}`,
+        orderIndex,
+        status,
+        phase,
+        createdAt: `2026-06-12T00:00:0${orderIndex}.000Z`,
+      });
+      assert.deepEqual(
+        evaluateWorkoutEndDisposition([
+          snapshot(0, SessionExerciseStatus.Completed),
+          snapshot(1, SessionExerciseStatus.Completed),
+          snapshot(2, SessionExerciseStatus.NotStarted),
+        ] as never),
+        { disposition: "partially_completed", completedMainExerciseCount: 2, requiredCompletedMainExerciseCount: 2 },
+      );
+      assert.deepEqual(
+        evaluateWorkoutEndDisposition([
+          snapshot(0, SessionExerciseStatus.Completed),
+          snapshot(1, SessionExerciseStatus.NotStarted),
+        ] as never),
+        { disposition: "abandoned", completedMainExerciseCount: 1, requiredCompletedMainExerciseCount: 2 },
       );
     },
   },
@@ -9595,11 +9627,32 @@ const tests: TestCase[] = [
         assert.equal(sundayMarks.some((mark) => mark.title === "Chuẩn bị bài Thứ 2"), true);
 
         const chippingMarks = allMarks.filter((mark) => mark.title.includes("Chipping"));
+        const puttingMarks = allMarks.filter((mark) => mark.title.includes("23 putts"));
         assert.equal(chippingMarks.every((mark) => mark.title.startsWith("Chipping") && mark.title.includes("Hit Flagsticky")), true);
         assert.equal(chippingMarks.some((mark) => mark.title.includes("Short Game Practice")), false);
         const chippingTestPlan = buildChippingShortGamePracticePlanForMarkTitle(chippingMarks.find((mark) => mark.title.includes("Chipping 3-5-7 m"))!.title);
         assert.equal(chippingTestPlan?.reduce((total, set) => total + set.reps, 0), 24);
         assert.deepEqual(chippingTestPlan?.map((set) => `${set.distanceLabel}:${set.reps}`), ["3 m:4", "5 m:4", "7 m:4", "3 m:4", "5 m:4", "7 m:4"]);
+        const puttingPlan = buildPuttingShortGamePracticePlanForMarkTitle(puttingMarks[0]!.title);
+        assert.equal(puttingPlan?.reduce((total, set) => total + set.reps, 0), 23);
+        assert.deepEqual(puttingPlan?.map((set) => `${set.distanceLabel}:${set.reps}`), ["60 cm:3", "90 cm:1", "120 cm:2", "150 cm:2", "180 cm:15"]);
+
+        const golfPath = await getPathByTitle(harness, "user_1", "Golf Craft");
+        assert.ok(golfPath);
+        const golfRoutines = await harness.repos.strength.listRoutinesByPath(golfPath!.id);
+        const routineRepsByTitle = async (title: string) => {
+          const routine = golfRoutines.find((item) => item.title === title && item.routineType === WorkoutRoutineType.GolfPractice && item.isActive);
+          assert.ok(routine, `Missing routine ${title}`);
+          return (await harness.repos.strength.listRoutineExercises(routine!.id))
+            .filter((exercise) => exercise.orderIndex >= 6)
+            .sort((a, b) => a.orderIndex - b.orderIndex)
+            .map((exercise) => exercise.targetReps);
+        };
+        assert.deepEqual(await routineRepsByTitle("Golf Practice Putting 23 Putts"), [3, 1, 2, 2, 15]);
+        assert.deepEqual(await routineRepsByTitle("Golf Practice Chipping 3 m"), [8, 8, 8]);
+        assert.deepEqual(await routineRepsByTitle("Golf Practice Chipping 5 m"), [8, 8, 8]);
+        assert.deepEqual(await routineRepsByTitle("Golf Practice Chipping 7 m"), [8, 8, 8]);
+        assert.deepEqual(await routineRepsByTitle("Golf Practice Chipping 3-5-7 m"), [4, 4, 4, 4, 4, 4]);
 
         const scheduled = await harness.repos.signals.listSignalsByStatus([SignalStatus.Scheduled], { limit: 100 });
         assert.equal(scheduled.items.length, 58);

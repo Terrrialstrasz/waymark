@@ -230,6 +230,8 @@ function mapMarkDetailStatus(status: MarkInstanceStatus) {
   switch (status) {
     case MarkInstanceStatus.Completed:
       return "done";
+    case MarkInstanceStatus.PartiallyCompleted:
+      return "done";
     case MarkInstanceStatus.Skipped:
       return "skipped";
     case MarkInstanceStatus.Expired:

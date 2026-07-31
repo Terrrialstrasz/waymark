@@ -16,6 +16,7 @@ import {
   MarkReadinessResult,
   MarkTemplate,
   PackCheckInstanceStatus,
+  PartiallyCompleteMarkInstanceInput,
   RescheduleMarkInstanceInput,
   RescheduleMarkInstanceResult,
   SignalStatus,
@@ -36,6 +37,7 @@ const MARK_STATUS_DISPLAY_LABELS: Record<MarkInstanceStatus, string> = {
   [MarkInstanceStatus.Blocked]: "Blocked",
   [MarkInstanceStatus.Active]: "Active",
   [MarkInstanceStatus.Completed]: "Completed",
+  [MarkInstanceStatus.PartiallyCompleted]: "Partial Complete",
   [MarkInstanceStatus.Skipped]: "Skipped",
   [MarkInstanceStatus.Rescheduled]: "Rescheduled",
   [MarkInstanceStatus.Substituted]: "Substituted",
@@ -57,6 +59,7 @@ const TRANSITION_TABLE: Record<MarkInstanceStatus, ReadonlySet<MarkInstanceStatu
     MarkInstanceStatus.Blocked,
     MarkInstanceStatus.Active,
     MarkInstanceStatus.Completed,
+    MarkInstanceStatus.PartiallyCompleted,
     MarkInstanceStatus.Skipped,
     MarkInstanceStatus.Rescheduled,
     MarkInstanceStatus.Substituted,
@@ -71,8 +74,13 @@ const TRANSITION_TABLE: Record<MarkInstanceStatus, ReadonlySet<MarkInstanceStatu
     MarkInstanceStatus.Expired,
     MarkInstanceStatus.Cancelled,
   ]),
-  [MarkInstanceStatus.Active]: new Set([MarkInstanceStatus.Completed, MarkInstanceStatus.Skipped]),
+  [MarkInstanceStatus.Active]: new Set([
+    MarkInstanceStatus.Completed,
+    MarkInstanceStatus.PartiallyCompleted,
+    MarkInstanceStatus.Skipped,
+  ]),
   [MarkInstanceStatus.Completed]: new Set(),
+  [MarkInstanceStatus.PartiallyCompleted]: new Set(),
   [MarkInstanceStatus.Skipped]: new Set(),
   [MarkInstanceStatus.Rescheduled]: new Set(),
   [MarkInstanceStatus.Substituted]: new Set(),
@@ -86,6 +94,7 @@ const DEFAULT_VISIBLE_STATUSES = new Set<MarkInstanceStatus>([
   MarkInstanceStatus.Blocked,
   MarkInstanceStatus.Active,
   MarkInstanceStatus.Completed,
+  MarkInstanceStatus.PartiallyCompleted,
   MarkInstanceStatus.Skipped,
   MarkInstanceStatus.Rescheduled,
   MarkInstanceStatus.Substituted,
@@ -104,11 +113,12 @@ const TODAY_STATUS_ORDER: Record<MarkInstanceStatus, number> = {
   [MarkInstanceStatus.Blocked]: 2,
   [MarkInstanceStatus.Planned]: 3,
   [MarkInstanceStatus.Completed]: 4,
-  [MarkInstanceStatus.Skipped]: 5,
-  [MarkInstanceStatus.Rescheduled]: 6,
-  [MarkInstanceStatus.Substituted]: 7,
-  [MarkInstanceStatus.Expired]: 8,
-  [MarkInstanceStatus.Cancelled]: 9,
+  [MarkInstanceStatus.PartiallyCompleted]: 5,
+  [MarkInstanceStatus.Skipped]: 6,
+  [MarkInstanceStatus.Rescheduled]: 7,
+  [MarkInstanceStatus.Substituted]: 8,
+  [MarkInstanceStatus.Expired]: 9,
+  [MarkInstanceStatus.Cancelled]: 10,
 };
 
 export class InvalidMarkTransitionError extends Error {
@@ -132,6 +142,7 @@ export function getMarkStatusDisplayLabel(status: MarkInstanceStatus): string {
 export function isMarkFinalStatus(status: MarkInstanceStatus): boolean {
   return (
     status === MarkInstanceStatus.Completed ||
+    status === MarkInstanceStatus.PartiallyCompleted ||
     status === MarkInstanceStatus.Skipped ||
     status === MarkInstanceStatus.Rescheduled ||
     status === MarkInstanceStatus.Substituted ||
@@ -143,6 +154,7 @@ export function isMarkFinalStatus(status: MarkInstanceStatus): boolean {
 export function isMarkResolvedStatus(status: MarkInstanceStatus): boolean {
   return (
     status === MarkInstanceStatus.Completed ||
+    status === MarkInstanceStatus.PartiallyCompleted ||
     status === MarkInstanceStatus.Skipped ||
     status === MarkInstanceStatus.Rescheduled ||
     status === MarkInstanceStatus.Substituted ||
@@ -306,6 +318,26 @@ export class DefaultMarkEngine implements MarkEngine {
       const candidate = await this.ensureCompletableMark(repos, mark);
       const updated = await repos.marks.updateMarkInstance(candidate.id, {
         status: transitionMarkStatus(candidate, MarkInstanceStatus.Completed).status,
+        completedAt,
+        proofNote: input.proofNote ?? null,
+        completionSummary: input.completionSummary ?? null,
+      });
+
+      await this.resolveSignalsForMark(repos, updated.id, completedAt);
+      await this.settleDependenciesForResolvedMark(repos, updated, completedAt);
+
+      return updated;
+    });
+  }
+
+  async partiallyCompleteMarkInstance(input: PartiallyCompleteMarkInstanceInput): Promise<MarkInstance> {
+    return this.repositories.transaction.runInTransaction(async (repos) => {
+      const mark = await this.requireMark(repos, input.markInstanceId);
+      const completedAt = nowIso(input.completedAt);
+
+      const candidate = await this.ensureCompletableMark(repos, mark);
+      const updated = await repos.marks.updateMarkInstance(candidate.id, {
+        status: transitionMarkStatus(candidate, MarkInstanceStatus.PartiallyCompleted).status,
         completedAt,
         proofNote: input.proofNote ?? null,
         completionSummary: input.completionSummary ?? null,

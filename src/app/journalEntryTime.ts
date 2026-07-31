@@ -60,7 +60,7 @@ export function formatJournalTimeChipLabel(input: {
 export function resolveMarkJournalTime(input: MarkTimeInput) {
   if (input.origin === MarkInstanceOrigin.QuickCapture) {
     const capturedAt =
-      input.status === MarkInstanceStatus.Completed ? input.completedAt
+      input.status === MarkInstanceStatus.Completed || input.status === MarkInstanceStatus.PartiallyCompleted ? input.completedAt
       : input.status === MarkInstanceStatus.Skipped ? input.skippedAt
       : input.createdAt;
 
@@ -85,7 +85,7 @@ export function resolveMarkJournalTime(input: MarkTimeInput) {
   }
 
   const resolvedAt =
-    input.status === MarkInstanceStatus.Completed ? input.completedAt
+    input.status === MarkInstanceStatus.Completed || input.status === MarkInstanceStatus.PartiallyCompleted ? input.completedAt
     : input.status === MarkInstanceStatus.Skipped ? input.skippedAt
     : input.createdAt;
 

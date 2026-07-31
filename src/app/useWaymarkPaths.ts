@@ -259,7 +259,7 @@ async function loadProofStatsByPath(app: ReturnType<typeof useWaymarkApp>, paths
 
 function isWeeklyProofMark(mark: MarkInstance) {
   return (
-    mark.status === MarkInstanceStatus.Completed ||
+    (mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted) ||
     Boolean(mark.completedAt) ||
     Boolean(mark.proofNote?.trim()) ||
     Boolean(mark.completionSummary?.trim()) ||

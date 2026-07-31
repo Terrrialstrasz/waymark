@@ -6,6 +6,13 @@ const CHIPPING_LANDING_ZONES: Record<string, string> = {
   "5": "2.0 m",
   "7": "2.8 m",
 };
+const PUTTING_PRESCRIPTION: Array<{ distanceCm: 60 | 90 | 120 | 150 | 180; reps: number }> = [
+  { distanceCm: 60, reps: 3 },
+  { distanceCm: 90, reps: 1 },
+  { distanceCm: 120, reps: 2 },
+  { distanceCm: 150, reps: 2 },
+  { distanceCm: 180, reps: 15 },
+];
 
 function normalizeDistanceToken(value: string) {
   return value.trim().replace(",", ".").replace(/\s*m$/i, "");
@@ -50,6 +57,25 @@ export function buildChippingShortGamePracticePlanForMarkTitle(title: string): G
           ? "Hold rhythm. Hit/Miss only; miss still counts as a rep."
           : "Pressure set. Keep the same routine; no make-up shots.",
   }));
+}
+
+export function buildPuttingShortGamePracticePlanForMarkTitle(title: string): GolfShortGameSetPlan[] | null {
+  const normalized = title.trim().toLowerCase();
+  if (!normalized.includes("putt") || !normalized.includes("23 putts")) {
+    return null;
+  }
+
+  return PUTTING_PRESCRIPTION.map(({ distanceCm, reps }, index) => ({
+    setNumber: index + 1,
+    label: `Putting ${distanceCm} cm`,
+    distanceLabel: `${distanceCm} cm`,
+    reps,
+    note: "Record Hit/Miss for every putt. Misses still count as reps; no make-up putts.",
+  }));
+}
+
+export function buildGolfShortGamePracticePlanForMarkTitle(title: string): GolfShortGameSetPlan[] | null {
+  return buildChippingShortGamePracticePlanForMarkTitle(title) ?? buildPuttingShortGamePracticePlanForMarkTitle(title);
 }
 
 export function resolveGolfPracticeWorkoutTypeForMarkTitle(title: string): GolfWorkoutType | null {

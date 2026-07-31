@@ -7,6 +7,8 @@ import {
   CompleteWorkoutSessionInput,
   CompleteWorkoutSessionResult,
   CreateSessionSnapshotsInput,
+  EndWorkoutSessionInput,
+  EndWorkoutSessionResult,
   EntityId,
   EnterCooldownInput,
   EvaluateExerciseResultInput,
@@ -51,6 +53,7 @@ const WORKOUT_SESSION_STATUS_DISPLAY_LABELS: Record<WorkoutSessionStatus, string
   [WorkoutSessionStatus.Resting]: "Resting",
   [WorkoutSessionStatus.Cooldown]: "Cooldown",
   [WorkoutSessionStatus.Completed]: "Completed",
+  [WorkoutSessionStatus.PartiallyCompleted]: "Partial Complete",
   [WorkoutSessionStatus.Abandoned]: "Abandoned",
 };
 
@@ -60,27 +63,36 @@ const WORKOUT_SESSION_TRANSITIONS: Record<WorkoutSessionStatus, ReadonlySet<Work
   [WorkoutSessionStatus.Active]: new Set([
     WorkoutSessionStatus.ExerciseActive,
     WorkoutSessionStatus.Cooldown,
+    WorkoutSessionStatus.PartiallyCompleted,
     WorkoutSessionStatus.Abandoned,
   ]),
   [WorkoutSessionStatus.ExerciseActive]: new Set([
     WorkoutSessionStatus.SetActive,
     WorkoutSessionStatus.Cooldown,
+    WorkoutSessionStatus.PartiallyCompleted,
     WorkoutSessionStatus.Abandoned,
   ]),
   [WorkoutSessionStatus.SetActive]: new Set([
     WorkoutSessionStatus.Resting,
     WorkoutSessionStatus.Active,
     WorkoutSessionStatus.Cooldown,
+    WorkoutSessionStatus.PartiallyCompleted,
     WorkoutSessionStatus.Abandoned,
   ]),
   [WorkoutSessionStatus.Resting]: new Set([
     WorkoutSessionStatus.SetActive,
     WorkoutSessionStatus.ExerciseActive,
     WorkoutSessionStatus.Cooldown,
+    WorkoutSessionStatus.PartiallyCompleted,
     WorkoutSessionStatus.Abandoned,
   ]),
-  [WorkoutSessionStatus.Cooldown]: new Set([WorkoutSessionStatus.Completed]),
+  [WorkoutSessionStatus.Cooldown]: new Set([
+    WorkoutSessionStatus.Completed,
+    WorkoutSessionStatus.PartiallyCompleted,
+    WorkoutSessionStatus.Abandoned,
+  ]),
   [WorkoutSessionStatus.Completed]: new Set(),
+  [WorkoutSessionStatus.PartiallyCompleted]: new Set(),
   [WorkoutSessionStatus.Abandoned]: new Set(),
 };
 
@@ -130,7 +142,11 @@ export function getWorkoutCycleStep(cycleIndex: number): WorkoutCycleStep {
 }
 
 export function isWorkoutSessionFinalStatus(status: WorkoutSessionStatus): boolean {
-  return status === WorkoutSessionStatus.Completed || status === WorkoutSessionStatus.Abandoned;
+  return (
+    status === WorkoutSessionStatus.Completed ||
+    status === WorkoutSessionStatus.PartiallyCompleted ||
+    status === WorkoutSessionStatus.Abandoned
+  );
 }
 
 export function isWorkoutSessionActiveStatus(status: WorkoutSessionStatus): boolean {
@@ -267,6 +283,26 @@ function getCompletedLogCount(logs: ExerciseSetLog[]): number {
 
 function getOrderedSnapshots(snapshots: SessionExerciseSnapshot[]): SessionExerciseSnapshot[] {
   return [...snapshots].sort((left, right) => left.orderIndex - right.orderIndex || left.createdAt.localeCompare(right.createdAt));
+}
+
+export function evaluateWorkoutEndDisposition(snapshots: SessionExerciseSnapshot[]): {
+  disposition: "abandoned" | "partially_completed";
+  completedMainExerciseCount: number;
+  requiredCompletedMainExerciseCount: number;
+} {
+  const firstMainSnapshots = getOrderedSnapshots(snapshots).filter((snapshot) => isMainPhase(snapshot.phase)).slice(0, 2);
+  const completedMainExerciseCount = firstMainSnapshots.filter(
+    (snapshot) => snapshot.status === SessionExerciseStatus.Completed,
+  ).length;
+  const requiredCompletedMainExerciseCount = 2;
+  return {
+    disposition:
+      requiredCompletedMainExerciseCount > 0 && completedMainExerciseCount >= requiredCompletedMainExerciseCount ?
+        "partially_completed"
+      : "abandoned",
+    completedMainExerciseCount,
+    requiredCompletedMainExerciseCount,
+  };
 }
 
 function getProgressionRuleForExercise(
@@ -1021,6 +1057,87 @@ export class DefaultStrengthSessionEngine implements StrengthSessionEngine {
       return {
         session: updatedSession,
         completedMark,
+        progressionUpdates,
+      };
+    });
+  }
+
+  async endWorkoutSession(input: EndWorkoutSessionInput): Promise<EndWorkoutSessionResult> {
+    return this.repositories.transaction.runInTransaction(async (repos) => {
+      const session = await this.requireSession(repos, input.workoutSessionInstanceId);
+      if (isWorkoutSessionFinalStatus(session.status)) {
+        throw new StrengthEngineValidationError(`Workout session ${session.id} is already final.`);
+      }
+
+      const endedAt = nowIso(input.endedAt);
+      const snapshots = getOrderedSnapshots(await repos.strength.listSessionSnapshots(session.id));
+      const routine = await repos.strength.getRoutineById(session.routineTemplateId);
+      const disposition =
+        routine?.routineType === WorkoutRoutineType.Strength ?
+          evaluateWorkoutEndDisposition(snapshots)
+        : {
+            disposition: "abandoned" as const,
+            completedMainExerciseCount: 0,
+            requiredCompletedMainExerciseCount: 2,
+          };
+
+      if (disposition.disposition === "abandoned") {
+        const abandonedSession = await repos.strength.upsertSession({
+          ...session,
+          status: transitionWorkoutSessionStatus(session, WorkoutSessionStatus.Abandoned).status,
+          notes: withUpdatedSessionNoteMeta(session, (meta) => ({ ...meta, freeformNote: input.note })),
+          currentExerciseSnapshotId: undefined,
+          currentSetNumber: undefined,
+        });
+        return {
+          session: abandonedSession,
+          disposition: "abandoned",
+          completedMainExerciseCount: disposition.completedMainExerciseCount,
+          requiredCompletedMainExerciseCount: disposition.requiredCompletedMainExerciseCount,
+          progressionUpdates: [],
+        };
+      }
+
+      const completedSnapshotIds = new Set(
+        snapshots
+          .filter((snapshot) => isMainPhase(snapshot.phase) && snapshot.status === SessionExerciseStatus.Completed)
+          .map((snapshot) => snapshot.id),
+      );
+      const progressionService = new DefaultStrengthProgressionService(repos);
+      const evaluations = await progressionService.evaluateWorkoutProgression({
+        workoutSessionInstanceId: session.id,
+      });
+      const progressionUpdates = await progressionService.applyProgressionUpdates({
+        updates: evaluations.filter((evaluation) => completedSnapshotIds.has(evaluation.snapshotId)),
+      });
+
+      const updatedSession = await repos.strength.upsertSession({
+        ...session,
+        status: transitionWorkoutSessionStatus(session, WorkoutSessionStatus.PartiallyCompleted).status,
+        phase: WorkoutSessionPhase.Complete,
+        completedAt: endedAt,
+        notes: withUpdatedSessionNoteMeta(session, (meta) => ({ ...meta, freeformNote: input.note })),
+        currentExerciseSnapshotId: undefined,
+        currentSetNumber: undefined,
+      });
+
+      const markEngine = createMarkEngine(repos);
+      const mark = await markEngine.partiallyCompleteMarkInstance({
+        markInstanceId: session.markInstanceId,
+        completedAt: endedAt,
+        proofNote: input.proofNote,
+        completionSummary:
+          input.completionSummary ??
+          `Partial workout complete: ${disposition.completedMainExerciseCount}/${disposition.requiredCompletedMainExerciseCount} required exercises completed.`,
+        mediaAssetIds: input.mediaAssetIds,
+      });
+
+      return {
+        session: updatedSession,
+        mark,
+        disposition: "partially_completed",
+        completedMainExerciseCount: disposition.completedMainExerciseCount,
+        requiredCompletedMainExerciseCount: disposition.requiredCompletedMainExerciseCount,
         progressionUpdates,
       };
     });

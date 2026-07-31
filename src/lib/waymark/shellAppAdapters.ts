@@ -556,7 +556,7 @@ function resolveUiPhase(
   session: Awaited<ReturnType<ShellAppAdapterContext["repositories"]["strength"]["getSessionByMarkInstance"]>> extends infer T ? NonNullable<T> : never,
   activeMainSnapshot?: Awaited<ReturnType<ShellAppAdapterContext["repositories"]["strength"]["listSessionSnapshots"]>>[number],
 ): SessionPhase {
-  if (session.phase === WorkoutSessionPhase.Complete || session.status === WorkoutSessionStatus.Completed) {
+  if (session.phase === WorkoutSessionPhase.Complete || session.status === WorkoutSessionStatus.Completed || session.status === WorkoutSessionStatus.PartiallyCompleted) {
     return "complete";
   }
   if (session.phase === WorkoutSessionPhase.Cooldown || session.status === WorkoutSessionStatus.Cooldown) {

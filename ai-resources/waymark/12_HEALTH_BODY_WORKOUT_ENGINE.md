@@ -34,6 +34,8 @@ Removed for now:
 
 Only full completed base sessions advance the cycle.
 
+When the user ends a strength session early, classify it from the first two main exercises: if both are completed, persist the session and its planned mark as `partially_completed`; this counts as a completed planned mark during Close Trail/day-end evaluation, but does not advance the A1 → Walk → A2 → B cycle. Progression is applied only to the exercises actually completed. If either of the first two exercises is incomplete, persist the session as `abandoned`, leave the planned mark unresolved, and apply no progression.
+
 | Result | Advances cycle? |
 |---|---:|
 | Workout A completed | Yes |

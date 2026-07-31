@@ -93,7 +93,7 @@ import {
 } from "../domain/waymark/enums";
 import { advanceStrengthSession, tickStrengthSession, updateStrengthSetActualLoad } from "../lib/waymark/strengthSessionExecution";
 import { saveGolfPracticeLog } from "../lib/waymark/golfPractice";
-import { buildChippingShortGamePracticePlanForMarkTitle, resolveGolfPracticeWorkoutTypeForMarkTitle } from "../lib/waymark/golfPracticeMark";
+import { buildGolfShortGamePracticePlanForMarkTitle, resolveGolfPracticeWorkoutTypeForMarkTitle } from "../lib/waymark/golfPracticeMark";
 import { deleteMarkDetail, loadStrengthSessionReadModel } from "../lib/waymark/shellAppAdapters";
 import { setMarkMetadata, type MarkResolutionKind } from "../lib/waymark";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
@@ -2309,8 +2309,8 @@ export function WaymarkShellApp() {
     Alert.alert(
       locale === "vi" ? "Ket thuc buoi tap?" : "End workout session?",
       locale === "vi"
-        ? "Buoi tap se duoc danh dau la bo do. Mark nay se khong duoc hoan tat."
-        : "This workout session will be abandoned and the mark will stay unresolved.",
+        ? "Neu 2 bai dau da hoan thanh, buoi tap se la Hoan thanh mot phan; neu chua, buoi tap se bi bo do."
+        : "If the first two exercises are complete, this session becomes Partial Complete; otherwise it will be abandoned.",
       [
         { text: locale === "vi" ? "Huy" : "Cancel", style: "cancel" },
         {
@@ -2319,7 +2319,7 @@ export function WaymarkShellApp() {
           onPress: () => {
             void (async () => {
               try {
-                await app.strengthSessionEngine.abandonWorkoutSession({ workoutSessionInstanceId: strengthReadModel.session.id });
+                await app.strengthSessionEngine.endWorkoutSession({ workoutSessionInstanceId: strengthReadModel.session.id });
                 setStrengthSessionDraft(null);
                 strengthSession.refresh();
                 liveToday.refresh();
@@ -2548,6 +2548,7 @@ export function WaymarkShellApp() {
     const primaryAction = getStrengthSessionPrimaryAction(resolvedStrengthSession);
     const isFinalSession =
       strengthReadModel.session.sessionStatus === WorkoutSessionStatus.Completed ||
+      strengthReadModel.session.sessionStatus === WorkoutSessionStatus.PartiallyCompleted ||
       strengthReadModel.session.sessionStatus === WorkoutSessionStatus.Abandoned;
     const canUseMainFlow =
       !isFinalSession &&
@@ -2689,7 +2690,7 @@ export function WaymarkShellApp() {
   const handleMoveMark = (markId: string, value: MoveMarkValue) => {
     void (async () => {
       const session = await app.repositories.strength.getSessionByMarkInstance(markId);
-      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.Abandoned) {
+      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.PartiallyCompleted && session.status !== WorkoutSessionStatus.Abandoned) {
         Alert.alert(
           locale === "vi" ? "Buổi tập đang dở" : "Workout in progress",
           locale === "vi"
@@ -2706,7 +2707,7 @@ export function WaymarkShellApp() {
   const handleSkipMark = (markId: string) => {
     void (async () => {
       const session = await app.repositories.strength.getSessionByMarkInstance(markId);
-      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.Abandoned) {
+      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.PartiallyCompleted && session.status !== WorkoutSessionStatus.Abandoned) {
         Alert.alert(
           locale === "vi" ? "Buổi tập đang dở" : "Workout in progress",
           locale === "vi"
@@ -2751,7 +2752,7 @@ export function WaymarkShellApp() {
     void substituteMarkId;
     void (async () => {
       const session = await app.repositories.strength.getSessionByMarkInstance(markId);
-      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.Abandoned) {
+      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.PartiallyCompleted && session.status !== WorkoutSessionStatus.Abandoned) {
         Alert.alert(
           locale === "vi" ? "Buổi tập đang dở" : "Workout in progress",
           locale === "vi"
@@ -2773,7 +2774,7 @@ export function WaymarkShellApp() {
   const handleSubstituteWithQuickMark = (markId: string, value: QuickSubstituteValue) => {
     void (async () => {
       const session = await app.repositories.strength.getSessionByMarkInstance(markId);
-      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.Abandoned) {
+      if (session && session.status !== WorkoutSessionStatus.NotStarted && session.status !== WorkoutSessionStatus.Completed && session.status !== WorkoutSessionStatus.PartiallyCompleted && session.status !== WorkoutSessionStatus.Abandoned) {
         Alert.alert(
           locale === "vi" ? "Buổi tập đang dở" : "Workout in progress",
           locale === "vi"
@@ -4088,7 +4089,7 @@ export function WaymarkShellApp() {
             onBack={popRoute}
             onSave={handleSaveGolfPractice}
             saving={savingGolfPractice}
-            shortGamePlan={markTitle ? buildChippingShortGamePracticePlanForMarkTitle(markTitle) : null}
+            shortGamePlan={markTitle ? buildGolfShortGamePracticePlanForMarkTitle(markTitle) : null}
             workoutTypeLocked={Boolean(route.markId)}
           />
         );

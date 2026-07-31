@@ -73,7 +73,10 @@ function resolveJournalMarkStatusLabel(
   metadata: MarkMetadata | null,
   locale: Locale,
 ) {
-  if (status === MarkInstanceStatus.Completed) {
+  if (status === MarkInstanceStatus.Completed || status === MarkInstanceStatus.PartiallyCompleted) {
+    if (status === MarkInstanceStatus.PartiallyCompleted) {
+      return locale === "vi" ? "Hoan thanh mot phan" : "Partial Complete";
+    }
     return metadata?.resolutionKind === "discipline_kept"
       ? locale === "vi" ? "Ky luat da giu" : "Discipline kept"
       : locale === "vi" ? "Da xong" : "Done";

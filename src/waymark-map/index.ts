@@ -15,6 +15,7 @@ import type {
   SeedMarkTemplateConfig,
   SeedMilestoneConfig,
   SeedPackCheckTemplateConfig,
+  SeedRoutineExerciseConfig,
   WaymarkMapConfig,
 } from "./types";
 import { PACK_CHECK_CATALOG } from "../config/packCheckCatalog";
@@ -113,7 +114,7 @@ function buildSharedCooldownStretchExercises(routinePrefix: "day_a" | "day_a2" |
   }));
 }
 
-function buildGolfWarmupExercises(routinePrefix: "putting" | "swing") {
+function buildGolfWarmupExercises(routinePrefix: string) {
   const warmups = [
     ["neck_shoulder_rolls", "Neck rolls + shoulder rolls", "neck-rolls-shoulder-rolls", "10 each direction"],
     ["wrist_grip", "Wrist circles + grip squeeze", "wrist-circles-grip-squeeze", "10 each direction"],
@@ -135,17 +136,69 @@ function buildGolfWarmupExercises(routinePrefix: "putting" | "swing") {
   }));
 }
 
-function buildGolfPuttingExercises(startOrderIndex = 6) {
-  return [60, 90, 120, 150, 180].map((distanceCm, index) => ({
+function buildGolfPuttingExercises(startOrderIndex = 6): SeedRoutineExerciseConfig[] {
+  const puttingPrescription = [
+    { distanceCm: 60, reps: 3 },
+    { distanceCm: 90, reps: 1 },
+    { distanceCm: 120, reps: 2 },
+    { distanceCm: 150, reps: 2 },
+    { distanceCm: 180, reps: 15 },
+  ] as const;
+
+  return puttingPrescription.map(({ distanceCm, reps }, index) => ({
     sourceSeedId: `putting_${distanceCm}cm`,
     exerciseTitle: `Putting ${distanceCm} cm`,
     canonicalSlug: `putting-${distanceCm}cm`,
     phase: WorkoutExercisePhase.Strength,
     orderIndex: startOrderIndex + index,
     targetType: ExerciseTargetType.RepsOnly,
-    targetReps: 10,
+    targetReps: reps,
     targetSets: 1,
   }));
+}
+
+function buildGolfChippingExercises(
+  routinePrefix: string,
+  sets: Array<{ label: string; slug: string; reps: number }>,
+  startOrderIndex = 6,
+): SeedRoutineExerciseConfig[] {
+  return sets.map((set, index) => ({
+    sourceSeedId: `${routinePrefix}_${set.slug}`,
+    exerciseTitle: set.label,
+    canonicalSlug: `golf-${routinePrefix}-${set.slug}`,
+    phase: WorkoutExercisePhase.Strength,
+    orderIndex: startOrderIndex + index,
+    targetType: ExerciseTargetType.RepsOnly,
+    targetReps: set.reps,
+    targetSets: 1,
+  }));
+}
+
+function buildGolfChippingDistanceExercises(distanceM: "3" | "5" | "7", landingZoneM: string) {
+  return buildGolfChippingExercises(`chipping_${distanceM}m`, [
+    { label: `Chipping ${distanceM} m · ${landingZoneM} landing · Calibration`, slug: "calibration", reps: 8 },
+    { label: `Chipping ${distanceM} m · ${landingZoneM} landing · Rhythm`, slug: "rhythm", reps: 8 },
+    { label: `Chipping ${distanceM} m · ${landingZoneM} landing · Pressure`, slug: "pressure", reps: 8 },
+  ]);
+}
+
+function buildGolfChippingTestExercises() {
+  const distances = [
+    { distanceM: "3", landingZoneM: "1.2" },
+    { distanceM: "5", landingZoneM: "2.0" },
+    { distanceM: "7", landingZoneM: "2.8" },
+  ] as const;
+
+  return buildGolfChippingExercises(
+    "chipping_3_5_7m",
+    [1, 2].flatMap((round) =>
+      distances.map(({ distanceM, landingZoneM }) => ({
+        label: `Chipping ${distanceM} m · ${landingZoneM} m landing · Round ${round}`,
+        slug: `${distanceM}m_round_${round}`,
+        reps: 4,
+      })),
+    ),
+  );
 }
 
 function careerAssignment(input: {
@@ -993,7 +1046,7 @@ const MASTER_MILESTONES: SeedMilestoneConfig[] = [
 ];
 
 export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
-  version: 9,
+  version: 10,
   paths: [
     { sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 },
     { sourceSeedId: "snag", slug: "snag-golf-vietnam", title: "SNAG Golf Vietnam", sortOrder: 1 },
@@ -1794,14 +1847,66 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
     {
       sourceSeedId: "golf_practice_putting_routine",
       pathSeedId: "golf",
-      title: "Golf Practice Short Game",
-      description: "Log-only Golf Craft short game practice.",
+      title: "Golf Practice Putting 23 Putts",
+      description: "Golf Craft putting prescription: 60 cm x3, 90 cm x1, 120 cm x2, 150 cm x2, 180 cm x15.",
       routineType: WorkoutRoutineType.GolfPractice,
       estimatedDurationMin: 25,
       isActive: true,
       exercises: [
         ...buildGolfWarmupExercises("putting"),
         ...buildGolfPuttingExercises(6),
+      ],
+    },
+    {
+      sourceSeedId: "golf_practice_chipping_3m_routine",
+      pathSeedId: "golf",
+      title: "Golf Practice Chipping 3 m",
+      description: "Golf Craft chipping: 3 sets x 8 reps, land inside 1.2 m zone and hit Flagsticky.",
+      routineType: WorkoutRoutineType.GolfPractice,
+      estimatedDurationMin: 30,
+      isActive: true,
+      exercises: [
+        ...buildGolfWarmupExercises("chipping_3m"),
+        ...buildGolfChippingDistanceExercises("3", "1.2 m"),
+      ],
+    },
+    {
+      sourceSeedId: "golf_practice_chipping_5m_routine",
+      pathSeedId: "golf",
+      title: "Golf Practice Chipping 5 m",
+      description: "Golf Craft chipping: 3 sets x 8 reps, land inside 2.0 m zone and hit Flagsticky.",
+      routineType: WorkoutRoutineType.GolfPractice,
+      estimatedDurationMin: 30,
+      isActive: true,
+      exercises: [
+        ...buildGolfWarmupExercises("chipping_5m"),
+        ...buildGolfChippingDistanceExercises("5", "2.0 m"),
+      ],
+    },
+    {
+      sourceSeedId: "golf_practice_chipping_7m_routine",
+      pathSeedId: "golf",
+      title: "Golf Practice Chipping 7 m",
+      description: "Golf Craft chipping: 3 sets x 8 reps, land inside 2.8 m zone and hit Flagsticky.",
+      routineType: WorkoutRoutineType.GolfPractice,
+      estimatedDurationMin: 30,
+      isActive: true,
+      exercises: [
+        ...buildGolfWarmupExercises("chipping_7m"),
+        ...buildGolfChippingDistanceExercises("7", "2.8 m"),
+      ],
+    },
+    {
+      sourceSeedId: "golf_practice_chipping_3_5_7m_routine",
+      pathSeedId: "golf",
+      title: "Golf Practice Chipping 3-5-7 m",
+      description: "Golf Craft chipping test: 6 sets x 4 reps across 3 m, 5 m, and 7 m.",
+      routineType: WorkoutRoutineType.GolfPractice,
+      estimatedDurationMin: 30,
+      isActive: true,
+      exercises: [
+        ...buildGolfWarmupExercises("chipping_3_5_7m"),
+        ...buildGolfChippingTestExercises(),
       ],
     },
     {

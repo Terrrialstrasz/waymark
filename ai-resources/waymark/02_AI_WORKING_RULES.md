@@ -60,6 +60,8 @@ Use this file as standing instructions for Codex or any AI assistant helping bui
 - Workout marks must open the Health Session flow through `interactionKind: "strength_session"`.
 - Golf practice marks must open the Golf Practice flow through `interactionKind: "golf_practice"`, even when weekly imports give each session a specific title such as `SNAG Roller Stroke 7h-5h` or `Putting Ladder Mon 60-180 cm`.
 - Golf practice title detection must stay centralized in `src/lib/waymark/golfPracticeMark.ts`; do not reimplement ad hoc title checks in screens or importers.
+- Weekly timetable imports that change Workout or Golf exercise prescriptions must update/repair the matching `WorkoutRoutineTemplate` and `RoutineExerciseTemplate` records as part of the import job. Do not rely on Mark title/description text alone; session snapshots and completion gating come from routine exercises in the DB.
+- For Golf weekly imports, ensure the relevant Golf routines are repaired before importing marks when putting/chipping distances, sets, or reps change. For Health Workout A/B/Walk changes, use the authoritative workout routine repair path before materializing or reusing workout marks.
 - Weekly timetable import tests should assert executable Today behavior for any new session-like mark, not just mark creation and signal creation.
 
 ## Image and icon handling

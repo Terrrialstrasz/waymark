@@ -555,6 +555,9 @@ function mapMarkToTodayItem(
   }
 
   const status = mapMarkStatus(mark.status, dependencies.length > 0);
+  const statusLabel = mark.status === MarkInstanceStatus.PartiallyCompleted
+    ? { en: "Partial Complete", vi: "Hoàn thành một phần" }
+    : { en: humanizeTodayMarkStatus(status, "en"), vi: humanizeTodayMarkStatus(status, "vi") };
   const isWorkoutMark = templateMetadata?.blockType === "workout_block";
   const golfPracticeWorkoutType = pathId === "golf" ? resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) : null;
   const isGolfPracticeMark = Boolean(golfPracticeWorkoutType);
@@ -571,8 +574,8 @@ function mapMarkToTodayItem(
     dependencies.length > 0 || visibleRelatedPackChecks.length > 0 || mark.description || signal || embeddedChecklist || isWorkoutMark || isGolfPracticeMark
       ? {
           statusLabel: {
-            en: humanizeTodayMarkStatus(status, "en"),
-            vi: humanizeTodayMarkStatus(status, "vi"),
+            en: statusLabel.en,
+            vi: statusLabel.vi,
           },
           intentionText: sanitizeUserFacingMarkDetail(mark.description)
             ? {
@@ -626,7 +629,7 @@ async function buildWorkoutPrimaryActionConfig(
     };
   }
 
-  if (session.status === WorkoutSessionStatus.Completed) {
+  if (session.status === WorkoutSessionStatus.Completed || session.status === WorkoutSessionStatus.PartiallyCompleted) {
     return {
       primaryActionLabel: { en: "View Session", vi: "Xem buổi tập" },
       primaryActionHint: { en: "Open the recorded workout session.", vi: "Mở lại buổi tập đã được ghi nhận." },
@@ -819,6 +822,7 @@ function mapPathToUiPathId(path: Pick<Path, "slug" | "title"> | undefined): Path
 function mapMarkStatus(status: MarkInstanceStatus, hasDependencies: boolean): TodayMarkStatus {
   switch (status) {
     case MarkInstanceStatus.Completed:
+    case MarkInstanceStatus.PartiallyCompleted:
       return "done";
     case MarkInstanceStatus.Skipped:
     case MarkInstanceStatus.Rescheduled:
