@@ -78,6 +78,7 @@ export type SeedMilestoneConfig = {
   status: MilestoneStatus;
   sortOrder: number;
   orderIndex: number;
+  startDate?: string;
   targetDate?: string;
 };
 

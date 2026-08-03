@@ -535,6 +535,7 @@ async function upsertSeedMilestone(
       title: config.title,
       description: config.description ?? null,
       status: config.status,
+      startDate: config.startDate ?? null,
       targetDate: config.targetDate ?? null,
       sortOrder: config.sortOrder,
       orderIndex: config.orderIndex,
@@ -557,6 +558,7 @@ async function upsertSeedMilestone(
       title: config.title,
       description: config.description ?? null,
       status: config.status,
+      startDate: config.startDate ?? null,
       targetDate: config.targetDate ?? null,
       sortOrder: config.sortOrder,
       orderIndex: config.orderIndex,
@@ -588,6 +590,7 @@ async function upsertSeedMilestone(
     entity.status !== config.status ||
     entity.sortOrder !== config.sortOrder ||
     entity.orderIndex !== config.orderIndex ||
+    (entity.startDate ?? null) !== (config.startDate ?? null) ||
     (entity.targetDate ?? null) !== (config.targetDate ?? null);
   if (!changed) {
     await saveSeedRecord(context.repositories.appSettings, context.userId, {
@@ -602,6 +605,7 @@ async function upsertSeedMilestone(
     title: config.title,
     description: config.description ?? null,
     status: config.status,
+    startDate: config.startDate ?? null,
     targetDate: config.targetDate ?? null,
     sortOrder: config.sortOrder,
     orderIndex: config.orderIndex,

@@ -127,6 +127,7 @@ export type PlannedMarkActionSheetContentProps = {
   layoutMode?: "sheet" | "fullScreen";
   featureFlags?: {
     substitutePlannedMark?: boolean;
+    markPrimaryAction?: boolean;
   };
   onClose: () => void;
   onMark: (markId: string) => void;
@@ -178,6 +179,7 @@ export function PlannedMarkActionSheetContent({
     isActionable &&
     featureFlags?.substitutePlannedMark === true &&
     (typeof onSubstituteWithExisting === "function" || typeof onSubstituteWithQuickMark === "function");
+  const showPrimaryAction = featureFlags?.markPrimaryAction !== false;
   const hasTimeRange = Boolean(mark.timeLabel && /[-–]/u.test(mark.timeLabel));
   const initialMoveValue = useMemo(() => getNormalizedInitialMoveValue(mark.timeLabel), [mark.timeLabel]);
   const dependencyGroups = groupDependencies(mark.dependencies ?? []);
@@ -333,17 +335,21 @@ export function PlannedMarkActionSheetContent({
 
       {isActionable ? (
         <View style={styles.footerWrap}>
-          <WMButton
-            fullWidth
-            label={primaryAction.label}
-            disabled={dialogBusy}
-            onPress={() => setDialogMode("mark")}
-            variant="primary"
-          />
-          {mark.primaryActionHint ?? primaryAction.hint ? (
-            <WMText style={styles.primaryHint} variant="metaCompact">
-              {mark.primaryActionHint ?? primaryAction.hint}
-            </WMText>
+          {showPrimaryAction ? (
+            <>
+              <WMButton
+                fullWidth
+                label={primaryAction.label}
+                disabled={dialogBusy}
+                onPress={() => setDialogMode("mark")}
+                variant="primary"
+              />
+              {mark.primaryActionHint ?? primaryAction.hint ? (
+                <WMText style={styles.primaryHint} variant="metaCompact">
+                  {mark.primaryActionHint ?? primaryAction.hint}
+                </WMText>
+              ) : null}
+            </>
           ) : null}
           <PlannedMarkActionRow actions={actions} theme={mark.path.theme} />
         </View>

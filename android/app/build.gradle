@@ -132,7 +132,6 @@ android {
     }
 }
 
-apply from: "./eas-build.gradle"
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:

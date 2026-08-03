@@ -32,9 +32,11 @@ import { resolveGolfPracticeWorkoutTypeForMarkTitle } from "../lib/waymark/golfP
 import { extractPackCheckReferenceLabels, sanitizeUserFacingMarkDetail } from "../lib/waymark/userFacingMarkText";
 import { getCurrentRuntimeLocalDate, materializeRuntimeForDate } from "./runtimeLifecycle";
 import { getWeekStartDate } from "./waymarkUi";
+import { createDailyPlanEngine } from "../lib/waymark/dailyPlanEngine";
 
 export type TodayData = {
   trailDayId: string;
+  dailyPlanMode?: "replan" | "execution";
   hasWeeklyTimetableForDate: boolean;
   selectedPathId: PathId;
   paths: TodayPathHeroPath[];
@@ -131,9 +133,31 @@ export async function loadTodayData(
     reportTodayLoadIssue("runtime materialization", error);
   }
 
-  const rawMarks = await timeTodayLoadStep("visibleMarks", () =>
-    attemptTodaySection("visible marks", () => app.markEngine.listVisibleMarksForDay(app.user.id, localDate), []),
+  const dailyPlanEngine = app.dailyPlanEngine ?? createDailyPlanEngine(app.repositories);
+  const dailyPlan = await timeTodayLoadStep("dailyPlanGate", () =>
+    dailyPlanEngine.beginReplan(app.user.id, localDate, app.user.timezone, nowIso),
   );
+
+  const rawMarks = await timeTodayLoadStep("visibleMarks", async () => {
+    if (dailyPlan.membership === "draft") {
+      return dailyPlan.effectiveMarks;
+    }
+    const visible = await attemptTodaySection(
+      "visible marks",
+      () => app.markEngine.listVisibleMarksForDay(app.user.id, localDate),
+      [],
+    );
+    const effectiveIds = new Set(dailyPlan.effectiveMarks.map((mark) => mark.id));
+    const auxiliary = visible.filter(
+      (mark) =>
+        !effectiveIds.has(mark.id) &&
+        (mark.origin === "quick_capture" ||
+          mark.origin === "manual_plan" ||
+          mark.origin === "backlog_converted" ||
+          mark.origin === "template_generated"),
+    );
+    return [...dailyPlan.effectiveMarks, ...auxiliary];
+  });
   const marks = await timeTodayLoadStep("markReadiness", async () => {
     const readyMarks: MarkInstance[] = [];
     for (const mark of rawMarks) {
@@ -318,6 +342,7 @@ export async function loadTodayData(
 
   return {
     trailDayId: trailDay.id,
+    dailyPlanMode: dailyPlan.membership === "draft" ? "replan" : "execution",
     hasWeeklyTimetableForDate,
     selectedPathId,
     paths: pathRows,

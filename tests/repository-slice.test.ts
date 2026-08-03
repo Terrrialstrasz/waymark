@@ -41,6 +41,7 @@ import {
   bootstrapWaymarkMap,
   evaluateWeightMilestoneProgress,
   createCloseTrailEngine,
+  createDailyPlanEngine,
   createDefaultDependencyEngine,
   createMarkEngine,
   createPackCheckEngine,
@@ -6861,7 +6862,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "Today only surfaces Close Trail after 8 PM or when all planned marks are settled",
+    name: "Confirmed Today only surfaces Close Trail after 8 PM or when all planned marks are settled",
     run: async () => {
       const harness = await createHarness();
       try {
@@ -6896,6 +6897,12 @@ const tests: TestCase[] = [
 
         const beforeEight = await loadTodayData(services, "en", { now: new Date("2026-06-01T19:00:00.000Z") });
         assert.equal(beforeEight.closeTrailStatus, "hidden");
+        assert.equal(beforeEight.dailyPlanMode, "replan");
+        await createDailyPlanEngine(harness.repos).confirmReplan(
+          "user_1",
+          "2026-06-01",
+          "2026-06-01T19:01:00.000Z",
+        );
 
         const afterEight = await loadTodayData(services, "en", { now: new Date("2026-06-01T20:00:00.000Z") });
         assert.equal(afterEight.closeTrailStatus, "default");
@@ -7942,7 +7949,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "CloseTrail keeps one original supervising mark when all supervising marks are substituted",
+    name: "CloseTrail counts effective substitutes when supervising context is inherited",
     run: async () => {
       const harness = await createHarness();
       try {
@@ -7986,10 +7993,10 @@ const tests: TestCase[] = [
 
         const summary = await createCloseTrailEngine(harness.repos).getCloseTrailSummary(trailDay.id);
 
-        assert.equal(summary.plannedCount, 3);
+        assert.equal(summary.plannedCount, 2);
         assert.equal(summary.completedCount, 2);
         assert.equal(summary.substitutedCount, 2);
-        assert.equal(summary.completionRatio.completed, 2 / 3);
+        assert.equal(summary.completionRatio.completed, 1);
       } finally {
         harness.close();
       }

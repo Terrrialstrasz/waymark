@@ -20,6 +20,7 @@ import {
   RescheduleMarkInstanceInput,
   RescheduleMarkInstanceResult,
   SignalStatus,
+  SignalEngine,
   SignalTargetType,
   SkipMarkInstanceInput,
   SubstituteMarkInstanceInput,
@@ -27,9 +28,11 @@ import {
   WaymarkRepositories,
 } from "../../domain/waymark";
 import { type DailyMarkAssignment, getDailyMarkAssignmentForTemplateDate } from "./dailyMarkPlanStore";
-import { getMarkMetadata } from "./markMetadataStore";
-import { setMarkMetadata } from "./markMetadataStore";
+import { copyMarkExecutionPresentationMetadata, getMarkMetadata, setMarkMetadata } from "./markMetadataStore";
 import { getMarkTemplateSeedMetadata } from "./markTemplateSeedStore";
+import { getSignalBehavior, setSignalBehavior } from "./signalBehaviorStore";
+import { recomputeEffectiveTrailDayExecutionCounters } from "./plannedMarkSourceOfTruth";
+import { buildZonedDateTime } from "../../app/waymarkUi";
 
 const MARK_STATUS_DISPLAY_LABELS: Record<MarkInstanceStatus, string> = {
   [MarkInstanceStatus.Planned]: "Planned",
@@ -300,7 +303,10 @@ function shouldGenerateForDate(
 }
 
 export class DefaultMarkEngine implements MarkEngine {
-  constructor(private readonly repositories: WaymarkRepositories) {}
+  constructor(
+    private readonly repositories: WaymarkRepositories,
+    private readonly signalEngine?: SignalEngine,
+  ) {}
 
   canTransitionMarkStatus(from: MarkInstanceStatus, to: MarkInstanceStatus): boolean {
     return canTransitionMarkStatusInternal(from, to);
@@ -311,7 +317,7 @@ export class DefaultMarkEngine implements MarkEngine {
       throw new MarkEngineValidationError("Force completion is not supported in the current Mark Engine pass.");
     }
 
-    return this.repositories.transaction.runInTransaction(async (repos) => {
+    const updated = await this.repositories.transaction.runInTransaction(async (repos) => {
       const mark = await this.requireMark(repos, input.markInstanceId);
       const completedAt = nowIso(input.completedAt);
 
@@ -325,13 +331,19 @@ export class DefaultMarkEngine implements MarkEngine {
 
       await this.resolveSignalsForMark(repos, updated.id, completedAt);
       await this.settleDependenciesForResolvedMark(repos, updated, completedAt);
+      const trailDay = await repos.trailDays.getTrailDayById(updated.trailDayId);
+      if (trailDay) {
+        await recomputeEffectiveTrailDayExecutionCounters(repos, updated.userId, trailDay.date);
+      }
 
       return updated;
     });
+    await this.reconcileSignalDeliveriesAfterCommit(updated.userId);
+    return updated;
   }
 
   async partiallyCompleteMarkInstance(input: PartiallyCompleteMarkInstanceInput): Promise<MarkInstance> {
-    return this.repositories.transaction.runInTransaction(async (repos) => {
+    const updated = await this.repositories.transaction.runInTransaction(async (repos) => {
       const mark = await this.requireMark(repos, input.markInstanceId);
       const completedAt = nowIso(input.completedAt);
 
@@ -345,13 +357,19 @@ export class DefaultMarkEngine implements MarkEngine {
 
       await this.resolveSignalsForMark(repos, updated.id, completedAt);
       await this.settleDependenciesForResolvedMark(repos, updated, completedAt);
+      const trailDay = await repos.trailDays.getTrailDayById(updated.trailDayId);
+      if (trailDay) {
+        await recomputeEffectiveTrailDayExecutionCounters(repos, updated.userId, trailDay.date);
+      }
 
       return updated;
     });
+    await this.reconcileSignalDeliveriesAfterCommit(updated.userId);
+    return updated;
   }
 
   async skipMarkInstance(input: SkipMarkInstanceInput): Promise<MarkInstance> {
-    return this.repositories.transaction.runInTransaction(async (repos) => {
+    const updated = await this.repositories.transaction.runInTransaction(async (repos) => {
       const mark = await this.requireMark(repos, input.markInstanceId);
       if (!canMarkBeSkipped(mark)) {
         throw new MarkEngineValidationError(`Mark ${mark.id} in status ${mark.status} cannot be skipped.`);
@@ -371,12 +389,18 @@ export class DefaultMarkEngine implements MarkEngine {
 
       await this.cancelSignalsForMark(repos, updated.id);
       await this.settleDependenciesForResolvedMark(repos, updated, skippedAt);
+      const trailDay = await repos.trailDays.getTrailDayById(updated.trailDayId);
+      if (trailDay) {
+        await recomputeEffectiveTrailDayExecutionCounters(repos, updated.userId, trailDay.date);
+      }
       return updated;
     });
+    await this.reconcileSignalDeliveriesAfterCommit(updated.userId);
+    return updated;
   }
 
   async rescheduleMarkInstance(input: RescheduleMarkInstanceInput): Promise<RescheduleMarkInstanceResult> {
-    return this.repositories.transaction.runInTransaction(async (repos) => {
+    const result = await this.repositories.transaction.runInTransaction(async (repos) => {
       const original = await this.requireMark(repos, input.markInstanceId);
       if (
         !(
@@ -394,6 +418,13 @@ export class DefaultMarkEngine implements MarkEngine {
         input.targetTrailDayId,
         input.targetLocalDate,
       );
+      const sourceTrailDay = await repos.trailDays.getTrailDayById(original.trailDayId);
+      if (!sourceTrailDay) {
+        throw new MarkEngineValidationError(`Source TrailDay ${original.trailDayId} does not exist.`);
+      }
+      if (targetTrailDay.date <= sourceTrailDay.date) {
+        throw new MarkEngineValidationError("A moved Mark must target a future TrailDay.");
+      }
 
       const replacement = await repos.marks.createMarkInstance({
         userId: original.userId,
@@ -432,18 +463,28 @@ export class DefaultMarkEngine implements MarkEngine {
         resolutionReason: input.reason ?? existingMetadata?.resolutionReason,
       });
 
-      await this.cancelSignalsForMark(repos, updatedOriginal.id);
+      await setMarkMetadata(
+        repos.appSettings,
+        original.userId,
+        copyMarkExecutionPresentationMetadata(existingMetadata, readyReplacement.id),
+      );
+
+      await this.transferSignalsToReplacement(repos, updatedOriginal, readyReplacement, targetTrailDay.date);
       await this.settleDependenciesForResolvedMark(repos, updatedOriginal, nowIso());
+      await recomputeEffectiveTrailDayExecutionCounters(repos, original.userId, sourceTrailDay.date);
+      await recomputeEffectiveTrailDayExecutionCounters(repos, original.userId, targetTrailDay.date);
 
       return {
         original: updatedOriginal,
         replacement: readyReplacement,
       };
     });
+    await this.reconcileSignalDeliveriesAfterCommit(result.original.userId);
+    return result;
   }
 
   async substituteMarkInstance(input: SubstituteMarkInstanceInput): Promise<SubstituteMarkInstanceResult> {
-    return this.repositories.transaction.runInTransaction(async (repos) => {
+    const result = await this.repositories.transaction.runInTransaction(async (repos) => {
       const original = await this.requireMark(repos, input.markInstanceId);
       if (
         !(
@@ -454,6 +495,9 @@ export class DefaultMarkEngine implements MarkEngine {
       ) {
         throw new MarkEngineValidationError(`Mark ${original.id} in status ${original.status} cannot be substituted.`);
       }
+      if (await this.hasSubstitutionAncestor(repos, original.id)) {
+        throw new MarkEngineValidationError(`Mark ${original.id} already belongs to a substitution chain.`);
+      }
 
       const substituteTrailDay = await this.resolveTargetTrailDay(
         repos,
@@ -461,6 +505,10 @@ export class DefaultMarkEngine implements MarkEngine {
         input.substituteTrailDayId ?? original.trailDayId,
         input.substituteLocalDate,
       );
+      const sourceTrailDay = await repos.trailDays.getTrailDayById(original.trailDayId);
+      if (!sourceTrailDay) {
+        throw new MarkEngineValidationError(`Source TrailDay ${original.trailDayId} does not exist.`);
+      }
 
       const substitute = await repos.marks.createMarkInstance({
         userId: original.userId,
@@ -499,7 +547,14 @@ export class DefaultMarkEngine implements MarkEngine {
         substitutedByMarkId: finalizedSubstitute.id,
       });
 
-      await this.cancelSignalsForMark(repos, updatedOriginal.id);
+      const existingMetadata = await getMarkMetadata(repos.appSettings, original.userId, original.id);
+      await setMarkMetadata(
+        repos.appSettings,
+        original.userId,
+        copyMarkExecutionPresentationMetadata(existingMetadata, finalizedSubstitute.id),
+      );
+
+      await this.transferSignalsToReplacement(repos, updatedOriginal, finalizedSubstitute, substituteTrailDay.date);
       await this.settleDependenciesForResolvedMark(repos, updatedOriginal, nowIso());
       if (finalizedSubstitute.status === MarkInstanceStatus.Completed) {
         await this.resolveSignalsForMark(repos, finalizedSubstitute.id, finalizedSubstitute.completedAt ?? nowIso());
@@ -509,12 +564,18 @@ export class DefaultMarkEngine implements MarkEngine {
           finalizedSubstitute.completedAt ?? nowIso(),
         );
       }
+      await recomputeEffectiveTrailDayExecutionCounters(repos, original.userId, sourceTrailDay.date);
+      if (substituteTrailDay.date !== sourceTrailDay.date) {
+        await recomputeEffectiveTrailDayExecutionCounters(repos, original.userId, substituteTrailDay.date);
+      }
 
       return {
         original: updatedOriginal,
         substitute: finalizedSubstitute,
       };
     });
+    await this.reconcileSignalDeliveriesAfterCommit(result.original.userId);
+    return result;
   }
 
   async evaluateMarkReadiness(markInstanceId: EntityId): Promise<MarkReadinessResult> {
@@ -917,7 +978,87 @@ export class DefaultMarkEngine implements MarkEngine {
       }
       await repos.signals.updateSignal(signal.id, {
         status: SignalStatus.Cancelled,
+        cancelledAt: nowIso(),
       });
+    }
+  }
+
+  private async hasSubstitutionAncestor(repos: WaymarkRepositories, markInstanceId: EntityId): Promise<boolean> {
+    const visited = new Set<string>([markInstanceId]);
+    let currentId = markInstanceId;
+    for (let depth = 0; depth < 32; depth += 1) {
+      const predecessors = await repos.marks.listPredecessorMarkInstances(currentId);
+      if (predecessors.length > 1) {
+        throw new MarkEngineValidationError(`Mark ${currentId} has multiple lineage predecessors.`);
+      }
+      const predecessor = predecessors[0];
+      if (!predecessor) {
+        return false;
+      }
+      if (visited.has(predecessor.id)) {
+        throw new MarkEngineValidationError(`Mark lineage cycle detected at ${predecessor.id}.`);
+      }
+      if (predecessor.status === MarkInstanceStatus.Substituted) {
+        return true;
+      }
+      visited.add(predecessor.id);
+      currentId = predecessor.id;
+    }
+    throw new MarkEngineValidationError(`Mark lineage for ${markInstanceId} exceeds 32 nodes.`);
+  }
+
+  private async transferSignalsToReplacement(
+    repos: WaymarkRepositories,
+    original: MarkInstance,
+    replacement: MarkInstance,
+    replacementLocalDate: LocalDateString,
+  ): Promise<void> {
+    const signals = await repos.signals.listSignalsByTarget(SignalTargetType.MarkInstance, original.id);
+    const timezone = (await repos.userProfiles.getUserProfileById(original.userId))?.timezone ?? "UTC";
+    for (const signal of signals) {
+      if (!UNRESOLVED_SIGNAL_STATUSES.has(signal.status)) {
+        continue;
+      }
+      await repos.signals.updateSignal(signal.id, {
+        status: SignalStatus.Cancelled,
+        cancelledAt: nowIso(),
+        ringingStartedAt: null,
+        snoozedUntil: null,
+      });
+      const scheduledAt = rebaseSignalForReplacement(
+        signal.scheduledAt,
+        original,
+        replacement,
+        replacementLocalDate,
+        timezone,
+      );
+      const created = await repos.signals.createSignal({
+        userId: original.userId,
+        targetType: SignalTargetType.MarkInstance,
+        targetId: replacement.id,
+        scheduledAt,
+        status: SignalStatus.Scheduled,
+      });
+      const behavior = await getSignalBehavior(repos.appSettings, original.userId, signal.id);
+      if (behavior) {
+        await setSignalBehavior(repos.appSettings, original.userId, {
+          signalId: created.id,
+          ringCount: 0,
+          maxRings: behavior.maxRings,
+          repeatAfterMinutes: behavior.repeatAfterMinutes,
+        });
+      }
+    }
+  }
+
+  private async reconcileSignalDeliveriesAfterCommit(userId: string) {
+    if (!this.signalEngine) {
+      return;
+    }
+    try {
+      await this.signalEngine.reconcileSignalDeliveries(userId);
+    } catch (error) {
+      console.warn("[MarkEngine] Signal delivery reconciliation will retry later.", error);
     }
   }
 
@@ -1004,6 +1145,9 @@ export class DefaultMarkEngine implements MarkEngine {
       if (!trailDay) {
         throw new MarkEngineValidationError(`Target TrailDay ${targetTrailDayId} does not exist.`);
       }
+      if (trailDay.status === "closed" || trailDay.status === "reopened") {
+        throw new MarkEngineValidationError(`Target TrailDay ${targetTrailDayId} is ${trailDay.status}.`);
+      }
       return trailDay;
     }
 
@@ -1011,7 +1155,11 @@ export class DefaultMarkEngine implements MarkEngine {
       throw new MarkEngineValidationError("Reschedule/substitute requires targetTrailDayId or targetLocalDate.");
     }
 
-    return repos.trailDays.getOrCreateTrailDay(userId, targetLocalDate);
+    const trailDay = await repos.trailDays.getOrCreateTrailDay(userId, targetLocalDate);
+    if (trailDay.status === "closed" || trailDay.status === "reopened") {
+      throw new MarkEngineValidationError(`Target TrailDay ${trailDay.id} is ${trailDay.status}.`);
+    }
+    return trailDay;
   }
 }
 
@@ -1035,6 +1183,43 @@ function rebaseDateTimeToLocalDate(
 
   const time = match[1].includes(".") ? match[1] : `${match[1]}.000`;
   return `${targetLocalDate}T${time}`;
+}
+
+function parseDateTimeAsEpoch(value?: string, timezone = "UTC"): number | null {
+  if (!value) {
+    return null;
+  }
+  const floating = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?$/);
+  if (floating) {
+    return Date.parse(buildZonedDateTime(value.slice(0, 10), value.slice(11, 19), timezone));
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function rebaseSignalForReplacement(
+  signalAt: string,
+  original: MarkInstance,
+  replacement: MarkInstance,
+  replacementLocalDate: LocalDateString,
+  timezone: string,
+): string {
+  const originalStart = parseDateTimeAsEpoch(original.scheduledStartAt, timezone);
+  const replacementStart = parseDateTimeAsEpoch(replacement.scheduledStartAt, timezone);
+  const signalEpoch = parseDateTimeAsEpoch(signalAt, timezone);
+  if (originalStart !== null && replacementStart !== null && signalEpoch !== null) {
+    return new Date(replacementStart + (signalEpoch - originalStart)).toISOString();
+  }
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(signalAt));
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value;
+  const time = `${value("hour") ?? "00"}:${value("minute") ?? "00"}:${value("second") ?? "00"}`;
+  return buildZonedDateTime(replacementLocalDate, time, timezone);
 }
 
 function shouldRemoveStaleGeneratedMark(
@@ -1085,6 +1270,6 @@ function resolveSeedPresentation(
   };
 }
 
-export function createMarkEngine(repositories: WaymarkRepositories): MarkEngine {
-  return new DefaultMarkEngine(repositories);
+export function createMarkEngine(repositories: WaymarkRepositories, signalEngine?: SignalEngine): MarkEngine {
+  return new DefaultMarkEngine(repositories, signalEngine);
 }

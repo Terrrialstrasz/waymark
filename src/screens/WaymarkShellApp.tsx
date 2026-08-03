@@ -11,7 +11,7 @@ import { MarkDetailTemplate as MarkDetailScreen } from "../components/mark-detai
 import { MemoryDetailTemplate as MemoryDetailScreen } from "../components/memory-detail/MemoryDetailTemplate";
 import { PackCheckTemplate } from "../components/pack-check";
 import { PathDetailTemplate } from "../components/paths/PathDetailTemplate";
-import { PathsOverviewTemplate } from "../components/paths/PathsOverviewTemplate";
+import { WeeklyMilestonesTemplate } from "../components/paths/WeeklyMilestonesTemplate";
 import { BottomNavBar } from "../components/primitives/BottomNavBar";
 import { WMChip } from "../components/primitives/WMChip";
 import { FieldJournalScreenShell } from "../components/primitives/FieldJournalScreenShell";
@@ -66,10 +66,10 @@ import {
   useWaymarkMemoryDetail,
   useWaymarkPackCheckDetail,
   useWaymarkPathDetail,
-  useWaymarkPaths,
   useWaymarkStrengthSession,
   useWaymarkToday,
   useWaymarkTursoDevSync,
+  useWaymarkWeeklyMilestones,
   useWaymarkWeeklyCoding,
 } from "../app";
 import { formatLocalDate, mapUiPathId } from "../app/waymarkUi";
@@ -514,6 +514,7 @@ export function WaymarkShellApp() {
   const [locale, setLocale] = useState<Locale>("en");
   const app = useWaymarkApp();
   const [selectedPathId, setSelectedPathId] = useState<PathId>("family");
+  const [weeklyMilestonesPathId, setWeeklyMilestonesPathId] = useState<"all" | PathId>("all");
   const [routeStack, setRouteStack] = useState<AppRoute[]>([{ kind: "today" }]);
   const [selectedTodayMark, setSelectedTodayMark] = useState<TodayMarkItem | null>(null);
   const [startingStrengthMarkId, setStartingStrengthMarkId] = useState<string | null>(null);
@@ -533,9 +534,9 @@ export function WaymarkShellApp() {
     route.kind === "weeklyTimetable" ||
     route.kind === "weeklySignal" ||
     detailRoute?.sourceType === "week_plan_item";
-  const shouldLoadPaths = activeTab === "paths" || route.kind === "pathDetail";
   const shouldLoadCloseTrail = route.kind === "closeTrail";
   const shouldLoadToday = activeTab === "today" || route.kind === "signal" || shouldLoadCloseTrail;
+  const shouldLoadWeeklyMilestones = route.kind === "paths";
 
   const googleDriveDevUpload = useGoogleDriveDevUpload(locale);
   const tursoDevSync = useWaymarkTursoDevSync(locale);
@@ -547,7 +548,10 @@ export function WaymarkShellApp() {
   const backlog = useWaymarkBacklog(locale, { enabled: shouldLoadBacklog });
   const capture = useWaymarkCapture();
   const weekly = useWaymarkWeeklyCoding(locale, { enabled: shouldLoadWeekly });
-  const pathsOverview = useWaymarkPaths(locale, { enabled: shouldLoadPaths });
+  const weeklyMilestones = useWaymarkWeeklyMilestones(locale, {
+    enabled: shouldLoadWeeklyMilestones,
+    selectedPathId: weeklyMilestonesPathId,
+  });
 
   const liveTodayData = liveToday.status === "ready" ? liveToday.data : null;
   const activeSignalRouteId = route.kind === "signal" ? route.signalId : null;
@@ -2826,6 +2830,7 @@ export function WaymarkShellApp() {
         );
       });
 
+      await liveToday.assertReplanActionAllowed(markId);
       await app.markEngine.substituteMarkInstance({
         markInstanceId: markId,
         substituteTitle: value.title.trim(),
@@ -3180,6 +3185,7 @@ export function WaymarkShellApp() {
           <TodayCockpitScreen
             closeTrailStatus={liveToday.status === "loading" ? "loading" : liveTodayData?.closeTrailStatus ?? "default"}
             currentExpeditions={liveTodayData?.currentExpeditions ?? []}
+            dailyPlanMode={liveTodayData?.dailyPlanMode ?? "execution"}
             featureFlags={liveTodayData?.featureFlags ?? {
               isPathHeroEnabled: false,
               isPathDetailEnabled: false,
@@ -3197,6 +3203,18 @@ export function WaymarkShellApp() {
             locale={locale}
             marks={todayMarks}
             onOpenCloseTrail={() => pushRoute({ kind: "closeTrail" })}
+            onConfirmDailyPlan={() => {
+              void (async () => {
+                try {
+                  await liveToday.confirmDailyPlan();
+                } catch (error) {
+                  Alert.alert(
+                    locale === "vi" ? "Không thể xác nhận kế hoạch" : "Unable to confirm today’s plan",
+                    error instanceof Error ? error.message : locale === "vi" ? "Đã có lỗi xảy ra." : "An unexpected error occurred.",
+                  );
+                }
+              })();
+            }}
             onOpenExpedition={(expedition) => openExpedition(expedition.id)}
             onOpenMarkDetail={(mark) => {
               setSelectedTodayMark(mark);
@@ -3297,19 +3315,19 @@ export function WaymarkShellApp() {
       }
       case "paths":
         return (
-          <PathsOverviewTemplate
-            actions={undefined}
-            debugInfo={{
-              summaryPathCount: pathsOverview.paths.length,
-              pathListLength: pathsOverview.pathRows.length,
-              renderedPathRows: pathsOverview.pathRows.length,
-              preview: pathsOverview.pathRows.slice(0, 3).map((item) => `${item.pathId}:${t(item.title, locale)}`),
-            }}
+          <WeeklyMilestonesTemplate
+            errorMessage={weeklyMilestones.error?.message}
             locale={locale}
-            onOpenPath={(item) => pushRoute({ kind: "pathDetail", pathId: item.pathId })}
-            paths={pathsOverview.pathRows}
+            milestones={weeklyMilestones.items}
+            missingStartDateCount={weeklyMilestones.missingStartDateCount}
+            onOpenPath={(pathId) => pushRoute({ kind: "pathDetail", pathId })}
+            onSelectPath={setWeeklyMilestonesPathId}
+            pathFilters={weeklyMilestones.pathFilters}
+            selectedPathId={weeklyMilestonesPathId}
             showBottomNav={false}
-            stats={pathsOverview.stats}
+            status={weeklyMilestones.status}
+            weekEnd={weeklyMilestones.weekEnd}
+            weekStart={weeklyMilestones.weekStart}
           />
         );
       case "me":
@@ -4603,6 +4621,7 @@ export function WaymarkShellApp() {
       <TodayMarkActionSheet
         item={selectedTodayMark}
         locale={locale}
+        mode={liveTodayData?.dailyPlanMode ?? "execution"}
         marks={todayMarks}
         onClose={() => setSelectedTodayMark(null)}
         onMark={handleMarkAction}
@@ -4625,7 +4644,6 @@ export function WaymarkShellApp() {
         onToggleEmbeddedChecklistItem={(markId, packCheckId, itemId, checked) => {
           void liveToday.toggleEmbeddedChecklistItem(markId, packCheckId, itemId, checked);
         }}
-        onSubstituteWithExisting={handleSubstituteWithExisting}
         onSubstituteWithQuickMark={handleSubstituteWithQuickMark}
         visible={route.kind === "today" && selectedTodayMark !== null}
       />

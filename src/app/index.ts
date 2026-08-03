@@ -9,6 +9,7 @@ export * from "./useWaymarkMarkDetail";
 export * from "./useWaymarkMemoryDetail";
 export * from "./useWaymarkPathDetail";
 export * from "./useWaymarkPaths";
+export * from "./useWaymarkWeeklyMilestones";
 export * from "./useWaymarkPackCheckDetail";
 export * from "./useWaymarkStrengthSession";
 export * from "./useWaymarkWeeklyCoding";

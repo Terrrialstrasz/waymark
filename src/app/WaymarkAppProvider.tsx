@@ -22,6 +22,8 @@ import {
   createSignalEngine,
   createStrengthProgressionService,
   createStrengthSessionEngine,
+  createDailyPlanEngine,
+  type DailyPlanEngine,
 } from "../lib/waymark";
 import { recordWaymarkSeedCompletedAsync, runWaymarkVaultBootGateAsync } from "./waymarkVaultBootGate";
 import {
@@ -55,6 +57,7 @@ export type WaymarkAppServices = {
   dependencyEngine: DependencyEngine;
   signalEngine: SignalEngine;
   closeTrailEngine: CloseTrailEngine;
+  dailyPlanEngine?: DailyPlanEngine;
   strengthProgressionService: StrengthProgressionService;
   strengthSessionEngine: StrengthSessionEngine;
 };
@@ -137,14 +140,16 @@ export function WaymarkAppProvider({ children }: PropsWithChildren) {
         const signalEngine = createSignalEngine(repositories, new CompositeSignalAlarmAdapter(repositories));
         const strengthProgressionService = createStrengthProgressionService(repositories);
 
+        const dailyPlanEngine = createDailyPlanEngine(repositories);
         const services: WaymarkAppServices = {
           repositories,
           user,
-          markEngine: createMarkEngine(repositories),
+          markEngine: createMarkEngine(repositories, signalEngine),
           packCheckEngine: createPackCheckEngine(repositories),
           dependencyEngine: createDefaultDependencyEngine(repositories),
           signalEngine,
           closeTrailEngine: createCloseTrailEngine(repositories, signalEngine),
+          dailyPlanEngine,
           strengthProgressionService,
           strengthSessionEngine: createStrengthSessionEngine(repositories, strengthProgressionService),
         };

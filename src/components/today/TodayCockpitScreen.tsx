@@ -36,6 +36,7 @@ export type TodayCockpitScreenProps = {
   selectedPathId: PathId;
   paths: TodayPathHeroPath[];
   marks: TodayMarkItem[];
+  dailyPlanMode?: "replan" | "execution";
   hasWeeklyTimetableForDate?: boolean;
   packChecks: TodayPackCheckItem[];
   allPackChecks?: TodayPackCheckItem[];
@@ -49,11 +50,13 @@ export type TodayCockpitScreenProps = {
   onOpenPackCheck?: (pack: TodayPackCheckItem) => void;
   onOpenExpedition?: (expedition: CurrentExpeditionItem) => void;
   onOpenCloseTrail?: () => void;
+  onConfirmDailyPlan?: () => void;
   withShell?: boolean;
 };
 
 export function TodayCockpitScreen({
   marks,
+  dailyPlanMode = "execution",
   hasWeeklyTimetableForDate = true,
   packChecks,
   allPackChecks,
@@ -65,6 +68,7 @@ export function TodayCockpitScreen({
   onOpenPackCheck,
   onOpenExpedition,
   onOpenCloseTrail,
+  onConfirmDailyPlan,
   withShell = true,
 }: TodayCockpitScreenProps) {
   const c = useCopy(locale);
@@ -77,6 +81,7 @@ export function TodayCockpitScreen({
   const prepareTomorrowPacks = packChecks.filter((pack) => pack.section === "prepare_tomorrow");
   const showIndependentPackChecks = featureFlags.isIndependentPackChecksEnabled && featureFlags.isPackCheckDetailEnabled;
   const showPrepareTomorrow = featureFlags.isPrepareTomorrowEnabled && featureFlags.isPackCheckDetailEnabled;
+  const isReplanMode = dailyPlanMode === "replan";
 
   const content = (
     <View style={styles.stack}>
@@ -88,7 +93,7 @@ export function TodayCockpitScreen({
         subtitle={dateLabel}
         title={c.today.title}
         actions={
-          featureFlags.isPackCheckDetailEnabled ? (
+          !isReplanMode && featureFlags.isPackCheckDetailEnabled ? (
             <IconBadge
               accessibilityLabel={locale === "vi" ? "Hien thi tat ca Pack Check" : "Show all Pack Checks"}
               decorative={false}
@@ -112,7 +117,15 @@ export function TodayCockpitScreen({
           />
         ) : null}
 
-        {showExpeditions ? (
+        {isReplanMode ? (
+          <WMButton
+            label={locale === "vi" ? "Xác nhận kế hoạch hôm nay" : "Confirm Today’s Plan"}
+            onPress={onConfirmDailyPlan}
+            variant="primary"
+          />
+        ) : null}
+
+        {!isReplanMode && showExpeditions ? (
           <CurrentExpeditionSection
             gate="enabled"
             locale={locale}
@@ -122,7 +135,7 @@ export function TodayCockpitScreen({
           />
         ) : null}
 
-        {showIndependentPackChecks ? (
+        {!isReplanMode && showIndependentPackChecks ? (
           <PackChecksSection
             gate="enabled"
             locale={locale}
@@ -132,7 +145,7 @@ export function TodayCockpitScreen({
           />
         ) : null}
 
-        {showPrepareTomorrow ? (
+        {!isReplanMode && showPrepareTomorrow ? (
           <PackChecksSection
             gate="enabled"
             locale={locale}
@@ -142,7 +155,7 @@ export function TodayCockpitScreen({
           />
         ) : null}
 
-        {featureFlags.isCloseTrailEnabled ? (
+        {!isReplanMode && featureFlags.isCloseTrailEnabled ? (
           <CloseTrailEntryCard
             copy={{
               accessibilityLabel: c.today.closeTrail.accessibilityLabel,

@@ -323,6 +323,7 @@ export type CloseTrailReadinessReason =
   | "time_threshold_memories_or_quick_marks"
   | "no_activity"
   | "unresolved_marks"
+  | "daily_replan_not_confirmed"
   | "reopened_not_ready";
 
 export interface CloseTrailReadiness {

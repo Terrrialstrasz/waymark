@@ -16,6 +16,7 @@ type Props = {
   item: TodayMarkItem | null;
   marks?: TodayMarkItem[];
   locale: Locale;
+  mode?: "replan" | "execution";
   onClose: () => void;
   onOpenDependencyMark?: (markId: string) => void;
   onOpenDependencyPackCheck?: (packCheckId: string) => void;
@@ -36,6 +37,7 @@ export function TodayMarkActionSheet({
   item,
   marks = [],
   locale,
+  mode = "execution",
   onClose,
   onOpenDependencyMark,
   onOpenDependencyPackCheck,
@@ -60,10 +62,10 @@ export function TodayMarkActionSheet({
             openDependencyMark: onOpenDependencyMark,
             openDependencyPackCheck: onOpenDependencyPackCheck,
             openSignal: onOpenSignal,
-            toggleEmbeddedChecklistItem: onToggleEmbeddedChecklistItem,
+            toggleEmbeddedChecklistItem: mode === "execution" ? onToggleEmbeddedChecklistItem : undefined,
           })
         : null,
-    [locale, onOpenDependencyMark, onOpenDependencyPackCheck, onOpenSignal, onToggleEmbeddedChecklistItem, resolvedItem],
+    [locale, mode, onOpenDependencyMark, onOpenDependencyPackCheck, onOpenSignal, onToggleEmbeddedChecklistItem, resolvedItem],
   );
 
   const substituteCandidates = useMemo<SubstituteCandidateMark[]>(
@@ -92,7 +94,7 @@ export function TodayMarkActionSheet({
   return (
     <WMSheet contentStyle={{ paddingTop: 0, flex: 1 }} onClose={onClose} presentation="fullScreen" visible={visible}>
       <PlannedMarkActionSheetContent
-        featureFlags={{ substitutePlannedMark: true }}
+        featureFlags={{ substitutePlannedMark: true, markPrimaryAction: mode === "execution" }}
         layoutMode="fullScreen"
         locale={locale}
         mark={mark}
@@ -109,7 +111,7 @@ export function TodayMarkActionSheet({
           onClose();
           await onSkip?.(markId);
         }}
-        onUpdateDetail={onUpdateDetail}
+        onUpdateDetail={mode === "execution" ? onUpdateDetail : undefined}
         onSubstituteWithExisting={
           onSubstituteWithExisting
             ? async (markId, substituteMarkId) => {

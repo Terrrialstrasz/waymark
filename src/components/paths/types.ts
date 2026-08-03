@@ -66,3 +66,38 @@ export type PathDetailItem = {
   whyThisPathBody?: LocalizedString;
   pulseMetrics?: PathPulseMetric[];
 };
+
+export type WeeklyMilestoneUrgency = "overdue" | "due_this_week" | "ahead" | "no_target";
+
+export type WeeklyMilestoneMarkItem = {
+  id: string;
+  title: string;
+  weekdayLabel: string;
+  completed: boolean;
+};
+
+export type WeeklyMilestoneItem = {
+  id: string;
+  pathRecordId: string;
+  pathId: PathId;
+  pathTitle: string;
+  pathAccent: string;
+  pathAccentDeep: string;
+  pathAccentSoft: string;
+  pathIconSemanticName: import("../../design/waymark-icon-map").WaymarkSemanticIconName;
+  expeditionId: string;
+  expeditionTitle: string;
+  title: string;
+  startDate: string | null;
+  targetDate: string | null;
+  targetDateLabel: string;
+  urgency: WeeklyMilestoneUrgency;
+  marks: WeeklyMilestoneMarkItem[];
+  sortOrder: number;
+};
+
+export type WeeklyMilestonePathFilterItem = {
+  id: "all" | PathId;
+  label: string;
+  count: number;
+};

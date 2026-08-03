@@ -86,6 +86,7 @@ export interface Milestone extends UserScopedRecord {
   title: string;
   description?: string;
   status: MilestoneStatus;
+  startDate?: LocalDateString;
   targetDate?: LocalDateString;
   sortOrder: number;
   completedAt?: ISODateTimeString;

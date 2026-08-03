@@ -84,6 +84,8 @@ import {
   SignalStatus,
   TrailDayStatus,
   UserProfile,
+  WeekPlanItemStatus,
+  WeekPlanStatus,
 } from "../../domain/waymark";
 import { WAYMARK_TABLES } from "../constants";
 import {
@@ -906,6 +908,18 @@ export class SQLiteMarkRepository extends SQLiteRepositoryBase implements MarkRe
     return row ? fromMarkInstanceRow(row) : null;
   }
 
+  async listPredecessorMarkInstances(markInstanceId: string): Promise<MarkInstance[]> {
+    const rows = await this.getAll<MarkInstanceRow>(
+      `SELECT * FROM ${WAYMARK_TABLES.markInstances}
+       WHERE (substituted_by_mark_id = ? OR rescheduled_to_mark_id = ?)
+         AND deleted_at IS NULL
+       ORDER BY created_at ASC;`,
+      markInstanceId,
+      markInstanceId,
+    );
+    return rows.map(fromMarkInstanceRow);
+  }
+
   async listMarkInstancesByTrailDay(trailDayId: string): Promise<MarkInstance[]> {
     const rows = await this.getAll<MarkInstanceRow>(
       `SELECT * FROM ${WAYMARK_TABLES.markInstances}
@@ -1091,6 +1105,7 @@ export class SQLiteExpeditionRepository extends SQLiteStubRepository implements 
       title: input.title,
       description: input.description ?? undefined,
       status: input.status,
+      startDate: input.startDate ?? undefined,
       targetDate: input.targetDate ?? undefined,
       sortOrder: input.sortOrder,
       orderIndex: input.orderIndex,
@@ -1113,6 +1128,7 @@ export class SQLiteExpeditionRepository extends SQLiteStubRepository implements 
       title: patch.title ?? entity.title,
       description: patch.description === undefined ? entity.description : patch.description ?? undefined,
       status: patch.status ?? entity.status,
+      startDate: patch.startDate === undefined ? entity.startDate : patch.startDate ?? undefined,
       targetDate: patch.targetDate === undefined ? entity.targetDate : patch.targetDate ?? undefined,
       sortOrder: patch.sortOrder ?? entity.sortOrder,
       orderIndex: patch.orderIndex ?? entity.orderIndex,
@@ -1848,6 +1864,25 @@ export class SQLiteWeekPlanRepository extends SQLiteStubRepository implements We
 
   async getItemById(id: string): Promise<WeekPlanItem | null> {
     const row = await this.getActiveRowById<WeekPlanItemRow>(WAYMARK_TABLES.weekPlanItems, id);
+    return row ? fromWeekPlanItemRow(row) : null;
+  }
+
+  async findActiveItemByCreatedMarkInstanceId(markInstanceId: string): Promise<WeekPlanItem | null> {
+    const row = await this.getFirst<WeekPlanItemRow>(
+      `SELECT wpi.*
+       FROM ${WAYMARK_TABLES.weekPlanItems} wpi
+       INNER JOIN ${WAYMARK_TABLES.weekPlans} wp ON wp.id = wpi.week_plan_id
+       WHERE wpi.created_mark_instance_id = ?
+         AND wpi.status <> ?
+         AND wp.status = ?
+         AND wpi.deleted_at IS NULL
+         AND wp.deleted_at IS NULL
+       ORDER BY wpi.created_at ASC
+       LIMIT 1;`,
+      markInstanceId,
+      WeekPlanItemStatus.Removed,
+      WeekPlanStatus.Active,
+    );
     return row ? fromWeekPlanItemRow(row) : null;
   }
 
