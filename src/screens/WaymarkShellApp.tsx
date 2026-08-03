@@ -827,9 +827,7 @@ export function WaymarkShellApp() {
   };
 
   const refreshLoadedShellData = () => {
-    if (shouldLoadToday) {
-      liveToday.refresh();
-    }
+    liveToday.refresh();
     if (shouldLoadWeekly) {
       weekly.refresh();
     }
@@ -3203,12 +3201,14 @@ export function WaymarkShellApp() {
             }}
             onOpenPackCheck={openPackCheck}
             onOpenPathDetail={(pathId) => pushRoute({ kind: "pathDetail", pathId })}
+            onRefresh={() => void liveToday.refresh()}
             onPathChange={(pathId) => {
               setSelectedPathId(pathId);
               void liveToday.setAnchorPath(pathId);
             }}
             packChecks={todayPackChecks}
             paths={liveTodayData?.paths ?? []}
+            isRefreshing={liveToday.status === "loading" || liveToday.isRefreshing}
             selectedPathId={selectedPathId}
             withShell
           />

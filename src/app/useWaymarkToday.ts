@@ -120,6 +120,7 @@ export function useWaymarkToday(locale: Locale, options: { enabled?: boolean } =
   const app = useWaymarkApp();
   const enabled = options.enabled ?? true;
   const lastLoadedLocalDateRef = useRef<string | null>(null);
+  const hasPendingRefreshRef = useRef(false);
   const loadRequestIdRef = useRef(0);
   const [state, setState] = useState<TodayState>({
     status: "loading",
@@ -191,9 +192,12 @@ export function useWaymarkToday(locale: Locale, options: { enabled?: boolean } =
   const refresh = useCallback(
     (preserveData = state.status === "ready") => {
       if (!enabled) {
-        return;
+        hasPendingRefreshRef.current = true;
+        lastLoadedLocalDateRef.current = null;
+        return Promise.resolve();
       }
-      void loadToday({ preserveData });
+      hasPendingRefreshRef.current = false;
+      return loadToday({ preserveData });
     },
     [enabled, loadToday, state.status],
   );
@@ -203,9 +207,11 @@ export function useWaymarkToday(locale: Locale, options: { enabled?: boolean } =
       return;
     }
     const currentLocalDate = getCurrentRuntimeLocalDate(app.user.timezone, new Date());
-    if (lastLoadedLocalDateRef.current === currentLocalDate) {
+    const shouldRefreshPendingData = hasPendingRefreshRef.current;
+    if (!shouldRefreshPendingData && lastLoadedLocalDateRef.current === currentLocalDate) {
       return;
     }
+    hasPendingRefreshRef.current = false;
     void loadToday({ preserveData: state.status === "ready" });
   }, [app.user.timezone, enabled, loadToday, state.status]);
 

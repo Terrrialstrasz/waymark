@@ -49,6 +49,8 @@ export type TodayCockpitScreenProps = {
   onOpenPackCheck?: (pack: TodayPackCheckItem) => void;
   onOpenExpedition?: (expedition: CurrentExpeditionItem) => void;
   onOpenCloseTrail?: () => void;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
   withShell?: boolean;
 };
 
@@ -65,6 +67,8 @@ export function TodayCockpitScreen({
   onOpenPackCheck,
   onOpenExpedition,
   onOpenCloseTrail,
+  onRefresh,
+  isRefreshing = false,
   withShell = true,
 }: TodayCockpitScreenProps) {
   const c = useCopy(locale);
@@ -88,17 +92,31 @@ export function TodayCockpitScreen({
         subtitle={dateLabel}
         title={c.today.title}
         actions={
-          featureFlags.isPackCheckDetailEnabled ? (
-            <IconBadge
-              accessibilityLabel={locale === "vi" ? "Hien thi tat ca Pack Check" : "Show all Pack Checks"}
-              decorative={false}
-              onPress={() => setPackCheckSheetVisible(true)}
-              semanticName="entity.packCheck"
-              shape="rounded"
-              size="md"
-              tone="warm"
-            />
-          ) : undefined
+          <>
+            {onRefresh ? (
+              <IconBadge
+                accessibilityLabel={locale === "vi" ? "Tai lai Today" : "Reload Today"}
+                decorative={false}
+                onPress={isRefreshing ? undefined : onRefresh}
+                semanticName="utility.refresh"
+                shape="rounded"
+                size="md"
+                state={isRefreshing ? "disabled" : "default"}
+                tone="warm"
+              />
+            ) : null}
+            {featureFlags.isPackCheckDetailEnabled ? (
+              <IconBadge
+                accessibilityLabel={locale === "vi" ? "Hien thi tat ca Pack Check" : "Show all Pack Checks"}
+                decorative={false}
+                onPress={() => setPackCheckSheetVisible(true)}
+                semanticName="entity.packCheck"
+                shape="rounded"
+                size="md"
+                tone="warm"
+              />
+            ) : null}
+          </>
         }
       />
 
