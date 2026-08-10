@@ -43,7 +43,7 @@ export const plannedMarkFixtures: Record<string, ExpeditionPlannedMarkItem> = {
     id: "test-public-html-upload",
     title: "Test public_html upload",
     subtitle: "Run a clean upload rehearsal for the launch package.",
-    status: "upcoming",
+    status: "planned",
     pathId: "snag",
     pathName: "SNAG",
     timingLabel: "Tomorrow",
@@ -54,7 +54,7 @@ export const plannedMarkFixtures: Record<string, ExpeditionPlannedMarkItem> = {
     id: "review-static-build-errors",
     title: "Review static build errors",
     subtitle: "Confirm the final build warnings are resolved cleanly.",
-    status: "done",
+    status: "completed",
     pathId: "snag",
     pathName: "SNAG",
     timingLabel: "Today",
@@ -137,10 +137,32 @@ export const milestoneFixtures: ExpeditionMilestoneItem[] = [
   },
 ];
 
+export const noMilestoneMarkFixture = {
+  id: "no-milestone-marks",
+  title: "No milestone",
+  completedMarks: 0,
+  totalMarks: 2,
+  plannedMarks: [
+    {
+      ...plannedMarkFixtures.planned,
+      id: "expedition-level-scope-note",
+      title: "Write expedition scope note",
+      timingLabel: "This week",
+    },
+    {
+      ...plannedMarkFixtures.upcoming,
+      id: "expedition-level-launch-risk",
+      title: "Review launch risk list",
+      timingLabel: "Tomorrow",
+    },
+  ],
+};
+
 export const expeditionDetailScreenFixtures = {
   active: {
-    expedition: expeditionFixtureBase,
+    expedition: { ...expeditionFixtureBase, totalMarks: expeditionFixtureBase.totalMarks + noMilestoneMarkFixture.totalMarks },
     milestones: milestoneFixtures,
+    unassignedMarks: noMilestoneMarkFixture,
   },
   completed: {
     expedition: {
@@ -157,10 +179,11 @@ export const expeditionDetailScreenFixtures = {
       completedMarks: milestone.totalMarks,
       plannedMarks: milestone.plannedMarks.map((mark) => ({
         ...mark,
-        status: "done" as const,
+        status: "completed" as const,
       })),
       isExpanded: false,
     })),
+    unassignedMarks: null,
   },
   upcoming: {
     expedition: {
@@ -177,9 +200,10 @@ export const expeditionDetailScreenFixtures = {
       completedMarks: 0,
       plannedMarks: milestone.plannedMarks.map((mark) => ({
         ...mark,
-        status: "upcoming" as const,
+        status: "planned" as const,
       })),
       isExpanded: false,
     })),
+    unassignedMarks: null,
   },
 };

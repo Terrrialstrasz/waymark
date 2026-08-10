@@ -5,6 +5,7 @@ import { applyMigrationsAsync } from "../src/db/migrations/runner";
 import {
   MarkInstanceOrigin,
   MarkInstanceStatus,
+  MemoryPrivacy,
   SignalStatus,
   SignalTargetType,
   WeekPlanItemStatus,
@@ -18,6 +19,7 @@ import {
   DailyPlanIntegrityError,
   getDailyReplanState,
   getSignalBehavior,
+  setCloseTrailRuleConfig,
   setDailyReplanState,
   setSignalBehavior,
   recomputeTrailDayCountersForDate,
@@ -118,6 +120,17 @@ async function createWeeklyCandidate(
   return { mark, trailDay };
 }
 
+async function seedDisciplineRules(harness: Awaited<ReturnType<typeof createHarness>>) {
+  await setCloseTrailRuleConfig(harness.repos.appSettings, harness.user.id, {
+    id: "daily-replan-disciplines",
+    sourceSeedId: "daily-replan-test",
+    disciplines: [
+      { key: "discipline-a", label: "Discipline A", pathId: harness.path.id },
+      { key: "discipline-b", label: "Discipline B", pathId: harness.path.id },
+    ],
+  });
+}
+
 const tests: Array<{ name: string; run: () => Promise<void> }> = [
   {
     name: "first open begins draft automatically and freezes membership",
@@ -156,11 +169,65 @@ const tests: Array<{ name: string; run: () => Promise<void> }> = [
     },
   },
   {
+    name: "empty confirmed first open reopens draft when weekly timetable marks arrive later",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const dailyPlan = createDailyPlanEngine(harness.repos);
+        const empty = await dailyPlan.beginReplan(harness.user.id, "2026-08-01", harness.user.timezone, "2026-08-01T06:00:00.000Z");
+        assert.equal(empty.membership, "confirmed");
+        assert.deepEqual(empty.candidateRootMarkIds, []);
+
+        const { mark } = await createWeeklyCandidate(harness, "late-weekly-mark");
+        const reopened = await dailyPlan.beginReplan(harness.user.id, "2026-08-01", harness.user.timezone, "2026-08-01T06:05:00.000Z");
+        assert.equal(reopened.membership, "draft");
+        assert.deepEqual(reopened.candidateRootMarkIds, [mark.id]);
+        assert.deepEqual(reopened.effectiveMarks.map((item) => item.id), [mark.id]);
+
+        const state = await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-01");
+        assert.equal(state?.status, "draft");
+      } finally { harness.close(); }
+    },
+  },
+  {
+    name: "begin replan self-heals a stale state whose root mark was cleared locally",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const stale = await createWeeklyCandidate(harness, "stale-root");
+        await setDailyReplanState(harness.repos.appSettings, harness.user.id, {
+          schemaVersion: 2,
+          localDate: "2026-08-01",
+          trailDayId: stale.trailDay.id,
+          timezone: harness.user.timezone,
+          status: "draft",
+          startedAt: "2026-08-01T06:00:00.000Z",
+          candidateRootMarkIds: [stale.mark.id],
+        });
+        await harness.repos.marks.softDeleteMarkInstance(stale.mark.id);
+
+        const restored = await createWeeklyCandidate(harness, "restored-root");
+        const plan = await createDailyPlanEngine(harness.repos).beginReplan(
+          harness.user.id,
+          "2026-08-01",
+          harness.user.timezone,
+          "2026-08-01T06:10:00.000Z",
+        );
+
+        assert.deepEqual(plan.candidateRootMarkIds, [restored.mark.id]);
+        assert.deepEqual(
+          (await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-01"))?.candidateRootMarkIds,
+          [restored.mark.id],
+        );
+      } finally { harness.close(); }
+    },
+  },
+  {
     name: "confirmed execution move keeps root snapshot and transfers unresolved signal intent",
     run: async () => {
       const harness = await createHarness();
       try {
-        const { mark } = await createWeeklyCandidate(harness, "move-after-confirm");
+        const { mark, trailDay } = await createWeeklyCandidate(harness, "move-after-confirm");
         const dailyPlan = createDailyPlanEngine(harness.repos);
         await dailyPlan.beginReplan(harness.user.id, "2026-08-01", harness.user.timezone, "2026-08-01T06:00:00.000Z");
         await dailyPlan.confirmReplan(harness.user.id, "2026-08-01", "2026-08-01T06:05:00.000Z");
@@ -182,7 +249,14 @@ const tests: Array<{ name: string; run: () => Promise<void> }> = [
         });
         const state = await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-01");
         assert.deepEqual(state?.candidateRootMarkIds, [mark.id]);
+        assert.deepEqual(state?.status === "confirmed" && state.schemaVersion === 2 ? state.confirmedPlanEntries : [], [
+          { rootMarkId: mark.id, baselineLeafMarkId: mark.id },
+        ]);
         assert.equal((await dailyPlan.resolveEffectiveDailyPlan(harness.user.id, "2026-08-01")).effectiveMarks.length, 0);
+        const summary = await createCloseTrailEngine(harness.repos).getCloseTrailSummary(trailDay.id);
+        assert.equal(summary.plannedCount, 1);
+        assert.equal(summary.completedCount, 0);
+        assert.equal(summary.rescheduledCount, 1);
         const tomorrow = await dailyPlan.resolveEffectiveDailyPlan(harness.user.id, "2026-08-02");
         assert.equal(tomorrow.membership, "provisional");
         assert.deepEqual(tomorrow.effectiveMarks.map((item) => item.id), [moved.replacement.id]);
@@ -208,7 +282,8 @@ const tests: Array<{ name: string; run: () => Promise<void> }> = [
         await createMarkEngine(harness.repos).skipMarkInstance({ markInstanceId: mark.id });
         assert.deepEqual((await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-01"))?.candidateRootMarkIds, [mark.id]);
         const summary = await createCloseTrailEngine(harness.repos).getCloseTrailSummary(trailDay.id);
-        assert.equal(summary.plannedCount, 0);
+        assert.equal(summary.plannedCount, 1);
+        assert.equal(summary.completedCount, 0);
         assert.equal(summary.skippedCount, 1);
       } finally { harness.close(); }
     },
@@ -234,6 +309,210 @@ const tests: Array<{ name: string; run: () => Promise<void> }> = [
         const summary = await createCloseTrailEngine(harness.repos).getCloseTrailSummary(trailDay.id);
         assert.equal(summary.plannedCount, 1);
         assert.equal(summary.substitutedCount, 1);
+      } finally { harness.close(); }
+    },
+  },
+  {
+    name: "draft replan exclusions happen before the confirmed denominator is frozen",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const skipped = await createWeeklyCandidate(harness, "preconfirm-skip");
+        const moved = await createWeeklyCandidate(harness, "preconfirm-move");
+        const substituted = await createWeeklyCandidate(harness, "preconfirm-substitute");
+        const dailyPlan = createDailyPlanEngine(harness.repos);
+        await dailyPlan.beginReplan(harness.user.id, "2026-08-01", harness.user.timezone, "2026-08-01T06:00:00.000Z");
+        const markEngine = createMarkEngine(harness.repos);
+        await markEngine.skipMarkInstance({
+          markInstanceId: skipped.mark.id,
+          skippedAt: "2026-08-01T06:01:00.000Z",
+        });
+        await markEngine.rescheduleMarkInstance({
+          markInstanceId: moved.mark.id,
+          targetLocalDate: "2026-08-02",
+        });
+        const replacement = await markEngine.substituteMarkInstance({
+          markInstanceId: substituted.mark.id,
+          substituteTitle: "preconfirm substitute leaf",
+          substituteMode: { mode: "ready" },
+        });
+
+        await dailyPlan.confirmReplan(harness.user.id, "2026-08-01", "2026-08-01T06:05:00.000Z");
+        await markEngine.completeMarkInstance({
+          markInstanceId: replacement.substitute.id,
+          completedAt: "2026-08-01T07:00:00.000Z",
+        });
+
+        const state = await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-01");
+        assert.deepEqual(state?.status === "confirmed" && state.schemaVersion === 2 ? state.confirmedPlanEntries : [], [
+          { rootMarkId: substituted.mark.id, baselineLeafMarkId: replacement.substitute.id },
+        ]);
+        const summary = await createCloseTrailEngine(harness.repos).getCloseTrailSummary(substituted.trailDay.id);
+        assert.equal(summary.plannedCount, 1);
+        assert.equal(summary.completedCount, 1);
+        assert.equal(summary.skippedCount, 0);
+        assert.equal(summary.rescheduledCount, 0);
+        assert.equal(summary.substitutedCount, 0);
+      } finally { harness.close(); }
+    },
+  },
+  {
+    name: "carry-over baseline does not count the historical move on the target day",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const source = await createWeeklyCandidate(harness, "carry-over-source", "2026-08-01");
+        const moved = await createMarkEngine(harness.repos).rescheduleMarkInstance({
+          markInstanceId: source.mark.id,
+          targetLocalDate: "2026-08-02",
+        });
+        const dailyPlan = createDailyPlanEngine(harness.repos);
+        await dailyPlan.beginReplan(harness.user.id, "2026-08-02", harness.user.timezone, "2026-08-02T06:00:00.000Z");
+        await dailyPlan.confirmReplan(harness.user.id, "2026-08-02", "2026-08-02T06:05:00.000Z");
+        const targetTrailDay = await harness.repos.trailDays.getTrailDayById(moved.replacement.trailDayId);
+        assert.ok(targetTrailDay);
+
+        const state = await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-02");
+        assert.deepEqual(state?.status === "confirmed" && state.schemaVersion === 2 ? state.confirmedPlanEntries : [], [
+          { rootMarkId: source.mark.id, baselineLeafMarkId: moved.replacement.id },
+        ]);
+        const summary = await createCloseTrailEngine(harness.repos).getCloseTrailSummary(targetTrailDay!.id);
+        assert.equal(summary.plannedCount, 1);
+        assert.equal(summary.rescheduledCount, 0);
+        assert.equal(summary.unresolvedCount, 1);
+      } finally { harness.close(); }
+    },
+  },
+  {
+    name: "Aug 4 style replan keeps pre-confirm exclusions out and post-confirm skips in",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const entries = [];
+        for (let index = 0; index < 13; index += 1) {
+          entries.push(await createWeeklyCandidate(harness, `aug4-mark-${index}`, "2026-08-04"));
+        }
+        const dailyPlan = createDailyPlanEngine(harness.repos);
+        await dailyPlan.beginReplan(harness.user.id, "2026-08-04", harness.user.timezone, "2026-08-04T06:26:27.000Z");
+        const markEngine = createMarkEngine(harness.repos);
+        for (const entry of entries.slice(0, 3)) {
+          await markEngine.skipMarkInstance({
+            markInstanceId: entry.mark.id,
+            skippedAt: "2026-08-04T06:28:00.000Z",
+          });
+        }
+        await markEngine.substituteMarkInstance({
+          markInstanceId: entries[3]!.mark.id,
+          substituteTitle: "aug4 preconfirm substitute",
+          substituteMode: { mode: "ready" },
+        });
+        const confirmed = await dailyPlan.confirmReplan(harness.user.id, "2026-08-04", "2026-08-04T06:30:19.000Z");
+        assert.equal(
+          confirmed.state?.status === "confirmed" && confirmed.state.schemaVersion === 2
+            ? confirmed.state.confirmedPlanEntries.length
+            : 0,
+          10,
+        );
+
+        for (const entry of entries.slice(4, 6)) {
+          await markEngine.completeMarkInstance({
+            markInstanceId: entry.mark.id,
+            completedAt: "2026-08-04T07:00:00.000Z",
+          });
+        }
+        for (const entry of entries.slice(6, 8)) {
+          await markEngine.skipMarkInstance({
+            markInstanceId: entry.mark.id,
+            skippedAt: "2026-08-04T07:50:00.000Z",
+          });
+        }
+
+        const summary = await createCloseTrailEngine(harness.repos).getCloseTrailSummary(entries[0]!.trailDay.id);
+        assert.equal(summary.plannedCount, 10);
+        assert.equal(summary.completedCount, 2);
+        assert.equal(summary.skippedCount, 2);
+        assert.equal(summary.rescheduledCount, 0);
+        assert.equal(summary.substitutedCount, 0);
+        assert.equal(summary.unresolvedCount, 6);
+        const trailDay = await harness.repos.trailDays.getTrailDayById(entries[0]!.trailDay.id);
+        assert.equal(trailDay?.plannedMarkCount, 10);
+        assert.equal(trailDay?.completedMarkCount, 2);
+        assert.equal(trailDay?.skippedMarkCount, 2);
+      } finally { harness.close(); }
+    },
+  },
+  {
+    name: "Close Trail judges the Aug 3 post-confirm outcome from confirmed commitments",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        await seedDisciplineRules(harness);
+        const entries = [];
+        for (let index = 0; index < 12; index += 1) {
+          entries.push(await createWeeklyCandidate(harness, `aug3-mark-${index}`, "2026-08-03"));
+        }
+        const dailyPlan = createDailyPlanEngine(harness.repos);
+        await dailyPlan.beginReplan(harness.user.id, "2026-08-03", harness.user.timezone, "2026-08-03T06:49:29.000Z");
+        await dailyPlan.confirmReplan(harness.user.id, "2026-08-03", "2026-08-03T06:50:32.000Z");
+        const markEngine = createMarkEngine(harness.repos);
+
+        for (const entry of entries.slice(0, 5)) {
+          await markEngine.completeMarkInstance({
+            markInstanceId: entry.mark.id,
+            completedAt: "2026-08-03T18:00:00.000Z",
+          });
+        }
+        for (const entry of entries.slice(5, 9)) {
+          await markEngine.skipMarkInstance({
+            markInstanceId: entry.mark.id,
+            skippedAt: "2026-08-03T21:02:00.000Z",
+          });
+        }
+        for (const entry of entries.slice(9, 11)) {
+          await markEngine.rescheduleMarkInstance({
+            markInstanceId: entry.mark.id,
+            targetLocalDate: "2026-08-04",
+          });
+        }
+        await markEngine.substituteMarkInstance({
+          markInstanceId: entries[11]!.mark.id,
+          substituteTitle: "aug3 completed substitute",
+          substituteMode: {
+            mode: "completed_now",
+            completedAt: "2026-08-03T21:03:50.000Z",
+          },
+        });
+        await harness.repos.memories.createMemory({
+          userId: harness.user.id,
+          trailDayId: entries[0]!.trailDay.id,
+          pathId: harness.path.id,
+          title: "Aug 3 memory",
+          capturedAt: "2026-08-03T21:01:17.000Z",
+          privacy: MemoryPrivacy.Private,
+        });
+
+        const result = await createCloseTrailEngine(harness.repos).closeTrailDay({
+          trailDayId: entries[0]!.trailDay.id,
+          closedAt: "2026-08-03T21:03:56.000Z",
+          disciplineSelections: [
+            { key: "discipline-a", label: "Discipline A", pathId: harness.path.id },
+            { key: "discipline-b", label: "Discipline B", pathId: harness.path.id },
+          ],
+        });
+
+        assert.equal(result.summary.plannedCount, 12);
+        assert.equal(result.summary.completedCount, 6);
+        assert.equal(result.summary.skippedCount, 4);
+        assert.equal(result.summary.rescheduledCount, 2);
+        assert.equal(result.summary.substitutedCount, 1);
+        assert.equal(result.judgment.day.passed, false);
+        assert.equal(result.judgment.character.passed, false);
+        assert.equal(result.judgment.character.completedCharacterItems, 8);
+        assert.equal(result.judgment.character.totalCharacterItems, 14);
+        const trailDay = await harness.repos.trailDays.getTrailDayById(entries[0]!.trailDay.id);
+        assert.equal(trailDay?.plannedMarkCount, 12);
+        assert.equal(trailDay?.completedMarkCount, 6);
+        assert.equal(trailDay?.skippedMarkCount, 4);
       } finally { harness.close(); }
     },
   },

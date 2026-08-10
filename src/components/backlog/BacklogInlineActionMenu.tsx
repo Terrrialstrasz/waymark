@@ -13,11 +13,9 @@ type Props = {
   item?: BacklogItemViewModel | null;
   anchor?: BacklogMenuAnchor | null;
   canDeleteBacklogItem?: boolean;
-  canAddToWeeklyCoding?: boolean;
   canCreateMarkFromBacklog?: boolean;
   onClose: () => void;
   onDeleteBacklogItem?: (itemId: string) => void;
-  onAddToWeeklyCoding?: (itemId: string) => void;
   onCreateMarkFromBacklog?: (itemId: string) => void;
 };
 
@@ -27,11 +25,9 @@ export function BacklogInlineActionMenu({
   item,
   anchor,
   canDeleteBacklogItem = false,
-  canAddToWeeklyCoding = false,
   canCreateMarkFromBacklog = false,
   onClose,
   onDeleteBacklogItem,
-  onAddToWeeklyCoding,
   onCreateMarkFromBacklog,
 }: Props) {
   const backlog = getCopy(locale).backlog;
@@ -50,16 +46,6 @@ export function BacklogInlineActionMenu({
           icon: "utility.close" as const,
           destructive: true,
           onPress: () => onDeleteBacklogItem(item.id),
-        }
-      : null,
-    canAddToWeeklyCoding && onAddToWeeklyCoding
-      ? {
-          id: "weeklyCoding",
-          label: backlog.actions.addToWeeklyCoding,
-          accessibilityLabel: backlog.accessibility.addToWeeklyCoding.replace("{title}", item.title),
-          icon: "entity.weeklyCodingReport" as const,
-          destructive: false,
-          onPress: () => onAddToWeeklyCoding(item.id),
         }
       : null,
     canCreateMarkFromBacklog && onCreateMarkFromBacklog

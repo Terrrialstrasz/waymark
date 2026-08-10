@@ -156,7 +156,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
     allowOverlap,
   };
 }
@@ -364,6 +364,7 @@ export async function importWeeklyTimetable20260720To0726(
     weekEndDate: "2026-07-26",
     note: "Imported from approved data-only weekly plan 2026-07-20 to 2026-07-26. Uses scheduled date/time, no dueAt, no hierarchy creation, and direct mark/pack-check signals.",
     importBatchId: "weekly_timetable_2026_07_20_2026_07_26_data_only_v1",
+    allowTitleRefs: true,
     items,
     setMarkDueAt: false,
   });
@@ -392,6 +393,7 @@ export async function importWeekendHospitalCarePatch20260725To0726(
     weekEndDate: "2026-07-26",
     note: "Weekend hospital care patch for 2026-07-25 to 2026-07-26. Preserves weight, chipping, putting, and Sunday soy eggs; replaces pristine family/VCCA/EPGA weekend placeholders with Character care marks.",
     importBatchId: "weekly_timetable_2026_07_25_2026_07_26_hospital_care_patch_v1",
+    allowTitleRefs: true,
     items,
     setMarkDueAt: false,
   });

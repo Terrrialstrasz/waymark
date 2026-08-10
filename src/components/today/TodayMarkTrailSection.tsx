@@ -30,6 +30,7 @@ type Props = {
   locale: Locale;
   hasWeeklyTimetableForDate?: boolean;
   onOpenMarkDetail?: (mark: TodayMarkItem) => void;
+  copyOverrides?: Partial<TodayMarkTrailCopy>;
 };
 
 type TrailMarkModel = {
@@ -45,6 +46,17 @@ type MarkVisualState = {
   titleColor: string;
   metaColor: string;
   opacity: number;
+};
+
+type TodayMarkTrailCopy = {
+  focusedTitle: string;
+  listTitle: string;
+  noMarksTitle: string;
+  noMarksBody: string;
+  missingTimetableTitle: string;
+  missingTimetableBody: string;
+  clearTitle: string;
+  clearBody: string;
 };
 
 const pathMap = new Map<PathId, TodayPathHeroPath>(todayPathHeroPaths.map((path) => [path.id, path]));
@@ -67,32 +79,18 @@ export function TodayMarkTrailSection({
   locale,
   hasWeeklyTimetableForDate = true,
   onOpenMarkDetail,
+  copyOverrides,
 }: Props) {
+  const copy = { ...getDefaultTrailCopy(locale), ...copyOverrides };
   const model = buildTrailMarkModel(marks);
 
   if (marks.length === 0) {
     return (
       <View style={styles.stack}>
-        <SectionHeader title={locale === "vi" ? "Now on the Trail" : "Now on the Trail"} />
+        <SectionHeader title={copy.focusedTitle} />
         <WMEmptyState
-          body={
-            hasWeeklyTimetableForDate
-              ? locale === "vi"
-                ? "Hom nay chua co dau moc nao."
-                : "No marks are visible for today yet."
-              : locale === "vi"
-                ? "Khong co Weekly Timetable nao duoc tai cho ngay nay."
-                : "No Weekly Timetable has been loaded for this date."
-          }
-          title={
-            hasWeeklyTimetableForDate
-              ? locale === "vi"
-                ? "Chua co dau moc"
-                : "No marks yet"
-              : locale === "vi"
-                ? "Chua co Weekly Timetable"
-                : "Weekly Timetable missing"
-          }
+          body={hasWeeklyTimetableForDate ? copy.noMarksBody : copy.missingTimetableBody}
+          title={hasWeeklyTimetableForDate ? copy.noMarksTitle : copy.missingTimetableTitle}
         />
       </View>
     );
@@ -102,13 +100,13 @@ export function TodayMarkTrailSection({
     <View style={styles.stack}>
       {model.focusedMark ? (
         <View style={styles.group}>
-          <SectionHeader title={locale === "vi" ? "Now on the Trail" : "Now on the Trail"} />
+          <SectionHeader title={copy.focusedTitle} />
           <FocusedMarkCard locale={locale} mark={model.focusedMark} onPress={onOpenMarkDetail} />
         </View>
       ) : null}
 
       <View style={styles.group}>
-        <SectionHeader title={locale === "vi" ? "Next on the Trail" : "Next on the Trail"} />
+        <SectionHeader title={copy.listTitle} />
         <View style={styles.list}>
           {model.listMarks.length > 0 ? (
             model.listMarks.map((mark) => (
@@ -116,14 +114,30 @@ export function TodayMarkTrailSection({
             ))
           ) : (
             <WMEmptyState
-              body={locale === "vi" ? "Moi dau moc trong ngay da duoc xu ly." : "Every visible mark for the day is settled."}
-              title={locale === "vi" ? "Trail da gon" : "Trail is clear"}
+              body={copy.clearBody}
+              title={copy.clearTitle}
             />
           )}
         </View>
       </View>
     </View>
   );
+}
+
+function getDefaultTrailCopy(locale: Locale): TodayMarkTrailCopy {
+  return {
+    focusedTitle: locale === "vi" ? "Now on the Trail" : "Now on the Trail",
+    listTitle: locale === "vi" ? "Next on the Trail" : "Next on the Trail",
+    noMarksTitle: locale === "vi" ? "Chua co dau moc" : "No marks yet",
+    noMarksBody: locale === "vi" ? "Hom nay chua co dau moc nao." : "No marks are visible for today yet.",
+    missingTimetableTitle: locale === "vi" ? "Chua co Weekly Timetable" : "Weekly Timetable missing",
+    missingTimetableBody:
+      locale === "vi"
+        ? "Khong co Weekly Timetable nao duoc tai cho ngay nay."
+        : "No Weekly Timetable has been loaded for this date.",
+    clearTitle: locale === "vi" ? "Trail da gon" : "Trail is clear",
+    clearBody: locale === "vi" ? "Moi dau moc trong ngay da duoc xu ly." : "Every visible mark for the day is settled.",
+  };
 }
 
 function FocusedMarkCard({

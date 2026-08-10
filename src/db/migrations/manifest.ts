@@ -1334,4 +1334,33 @@ CREATE TABLE IF NOT EXISTS planning_side_effect_retries (
 CREATE INDEX IF NOT EXISTS idx_planning_side_effect_retries_pending
   ON planning_side_effect_retries(vault_id, status, created_at);`,
   },
+  {
+    version: 22,
+    name: "0022_create_planning_conflicts.sql",
+    sql: `CREATE TABLE IF NOT EXISTS planning_conflicts (
+  id TEXT PRIMARY KEY NOT NULL,
+  vault_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('path', 'expedition', 'milestone')),
+  entity_id TEXT NOT NULL,
+  local_revision INTEGER NOT NULL,
+  remote_entity_revision INTEGER NOT NULL,
+  remote_change_sequence INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  remote_snapshot_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'ignored')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(vault_id, entity_type, entity_id),
+  FOREIGN KEY(vault_id) REFERENCES vaults(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_planning_conflicts_open
+  ON planning_conflicts(vault_id, status, updated_at);`,
+  },
+  {
+    version: 23,
+    name: "0023_add_turso_full_db_cursor_state.sql",
+    sql: `ALTER TABLE sync_state ADD COLUMN full_db_schema_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_state ADD COLUMN full_db_snapshot_completed_at INTEGER;`,
+  },
 ];

@@ -12,7 +12,18 @@ import type { TodayPathHeroPath } from "../lib/waymark/todayPathHero";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
 import type { TodayCockpitFeatureFlags } from "../components/today/TodayCockpitScreen";
 import type { Locale, PathId } from "../types/ui";
-import type { PackCheckInstance, PackCheckItemInstance, PackCheckTemplate, Path, Expedition, MarkDependency, MarkInstance, Signal } from "../domain/waymark";
+import type {
+  PackCheckInstance,
+  PackCheckItemInstance,
+  PackCheckTemplate,
+  Path,
+  Expedition,
+  MarkDependency,
+  MarkInstance,
+  MarkInstanceDetail,
+  Signal,
+  WorkoutRoutineTemplate,
+} from "../domain/waymark";
 import {
   DependencyStatus,
   ExpeditionStatus,
@@ -20,6 +31,7 @@ import {
   SignalStatus,
   SignalTargetType,
   TrailDayStatus,
+  WorkoutRoutineType,
   WorkoutSessionStatus,
 } from "../domain/waymark/enums";
 import type { WaymarkAppServices } from "./WaymarkAppProvider";
@@ -231,10 +243,12 @@ export async function loadTodayData(
   const relatedPackChecksByMarkId = new Map<string, TodayMarkActionSheetPackLink[]>();
   const embeddedChecklistsByMarkId = new Map<string, NonNullable<TodayMarkActionSheetConfig["embeddedChecklist"]>>();
   const templateMetadataByMarkId = new Map<string, Awaited<ReturnType<typeof getMarkTemplateSeedMetadata>> | null>();
-  const workoutPrimaryActionByMarkId = new Map<string, Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint"> | null>();
+  const workoutPrimaryActionByMarkId = new Map<string, Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint" | "launchConfig"> | null>();
+  const markDetailByMarkId = new Map<string, MarkInstanceDetail | null>();
   await timeTodayLoadStep("markDetails", async () => {
     for (const mark of marks) {
       try {
+        markDetailByMarkId.set(mark.id, await app.repositories.marks.getMarkInstanceDetail(mark.id));
         const templateMetadata = mark.templateId
           ? await getMarkTemplateSeedMetadata(app.repositories.appSettings, app.user.id, mark.templateId)
           : null;
@@ -252,6 +266,7 @@ export async function loadTodayData(
         workoutPrimaryActionByMarkId.set(mark.id, null);
         markDependencies.set(mark.id, []);
         relatedPackChecksByMarkId.set(mark.id, []);
+        markDetailByMarkId.set(mark.id, null);
       }
     }
     console.info(`[WaymarkTiming] today:markDetails:count ${marks.length}`);
@@ -269,6 +284,7 @@ export async function loadTodayData(
         embeddedChecklistsByMarkId.get(mark.id),
         templateMetadataByMarkId.get(mark.id) ?? null,
         workoutPrimaryActionByMarkId.get(mark.id) ?? null,
+        markDetailByMarkId.get(mark.id) ?? null,
       ),
     )
     .filter((item): item is TodayMarkItem => Boolean(item));
@@ -572,7 +588,8 @@ function mapMarkToTodayItem(
   signal: Signal | undefined,
   embeddedChecklist: TodayMarkActionSheetConfig["embeddedChecklist"] | undefined,
   templateMetadata: Awaited<ReturnType<typeof getMarkTemplateSeedMetadata>> | null,
-  workoutPrimaryAction: Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint"> | null,
+  workoutPrimaryAction: Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint" | "launchConfig"> | null,
+  markDetail: MarkInstanceDetail | null,
 ): TodayMarkItem | null {
   const pathId = mapPathToUiPathId(path);
   if (!pathId) {
@@ -592,22 +609,26 @@ function mapMarkToTodayItem(
         primaryActionHint: { en: "Enter the Golf Practice flow for this planned mark.", vi: "Vào flow Golf Practice cho planned mark này." },
       }
     : workoutPrimaryAction;
+  const launchConfig = isGolfPracticeMark ? workoutPrimaryAction?.launchConfig : primaryAction?.launchConfig;
+  const primerText = sanitizeUserFacingMarkDetail(markDetail?.primerSnapshot ?? mark.description);
+  const markNote = sanitizeUserFacingMarkDetail(markDetail?.preActionComment);
   const visibleRelatedPackChecks = relatedPackChecks.filter(
     (packCheck) => !dependencies.some((dependency) => dependency.targetType === "pack_check" && dependency.targetId === packCheck.targetId),
   );
   const actionSheet: TodayMarkActionSheetConfig | undefined =
-    dependencies.length > 0 || visibleRelatedPackChecks.length > 0 || mark.description || signal || embeddedChecklist || isWorkoutMark || isGolfPracticeMark
+    dependencies.length > 0 || visibleRelatedPackChecks.length > 0 || primerText || markNote || signal || embeddedChecklist || isWorkoutMark || isGolfPracticeMark
       ? {
           statusLabel: {
             en: statusLabel.en,
             vi: statusLabel.vi,
           },
-          intentionText: sanitizeUserFacingMarkDetail(mark.description)
+          intentionText: primerText
             ? {
-                en: sanitizeUserFacingMarkDetail(mark.description)!,
-                vi: sanitizeUserFacingMarkDetail(mark.description)!,
+                en: primerText,
+                vi: primerText,
               }
             : undefined,
+          markNote: markNote ? { en: markNote, vi: markNote } : undefined,
           signalLabel: signal
             ? {
                 en: "Open the active signal for this mark.",
@@ -619,6 +640,7 @@ function mapMarkToTodayItem(
           embeddedChecklist,
           primaryActionLabel: primaryAction?.primaryActionLabel,
           primaryActionHint: primaryAction?.primaryActionHint,
+          launchConfig,
         }
       : undefined;
 
@@ -626,6 +648,9 @@ function mapMarkToTodayItem(
     id: mark.id,
     title: { en: mark.title, vi: mark.title },
     pathId,
+    pathEntityId: mark.pathId,
+    expeditionId: mark.expeditionId,
+    milestoneId: mark.milestoneId,
     status,
     interactionKind: isWorkoutMark ? "strength_session" : isGolfPracticeMark ? "golf_practice" : "default",
     summary: buildMarkSummary(mark),
@@ -641,14 +666,27 @@ async function buildWorkoutPrimaryActionConfig(
   app: WaymarkAppServices,
   mark: MarkInstance,
   templateMetadata: Awaited<ReturnType<typeof getMarkTemplateSeedMetadata>> | null,
-): Promise<Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint"> | null> {
+): Promise<Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint" | "launchConfig"> | null> {
+  if (resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title)) {
+    const launchConfig = await buildGolfPracticeLaunchConfig(app, mark);
+    if (launchConfig) {
+      return {
+        primaryActionLabel: { en: "Start Practice", vi: "Bat dau luyen tap" },
+        primaryActionHint: { en: "Enter the Golf Practice flow for this planned mark.", vi: "Vao flow Golf Practice cho planned mark nay." },
+        launchConfig,
+      };
+    }
+  }
+
   if (templateMetadata?.blockType !== "workout_block") {
     return null;
   }
 
   const session = await app.repositories.strength.getSessionByMarkInstance(mark.id);
   if (!session || session.status === WorkoutSessionStatus.NotStarted || session.status === WorkoutSessionStatus.Abandoned) {
+    const launchConfig = await buildHealthWorkoutLaunchConfig(app, mark);
     return {
+      launchConfig,
       primaryActionLabel: { en: "Start Workout", vi: "Bắt đầu buổi tập" },
       primaryActionHint: { en: "Enter the workout flow for this planned mark.", vi: "Vào flow thực hiện buổi tập cho planned mark này." },
     };
@@ -665,6 +703,123 @@ async function buildWorkoutPrimaryActionConfig(
     primaryActionLabel: { en: "Resume Workout", vi: "Tiếp tục buổi tập" },
     primaryActionHint: { en: "Resume the workout session already in progress.", vi: "Tiếp tục buổi tập đang dở." },
   };
+}
+
+export async function buildHealthWorkoutLaunchConfig(
+  app: WaymarkAppServices,
+  mark: MarkInstance,
+): Promise<TodayMarkActionSheetConfig["launchConfig"]> {
+  const routines = (await app.repositories.strength.listRoutinesByPath(mark.pathId))
+    .filter((routine) => routine.isActive && routine.routineType !== WorkoutRoutineType.GolfPractice)
+    .sort((left, right) => left.title.localeCompare(right.title));
+  if (routines.length === 0) {
+    return undefined;
+  }
+
+  const defaultRoutine =
+    (mark.templateId ? routines.find((routine) => routine.markTemplateId === mark.templateId) : undefined) ??
+    routines.find((routine) => normalizeLaunchText(routine.title) === normalizeLaunchText(mark.title)) ??
+    routines.find((routine) => isWorkoutMinimalBodyweightRoutine(mark.title, routine)) ??
+    routines.find((routine) => normalizeLaunchText(mark.title).includes("walk") && routine.routineType === WorkoutRoutineType.Walk) ??
+    routines.find((routine) => normalizeLaunchText(mark.title).includes("day b") && normalizeLaunchText(routine.title).includes("day b")) ??
+    routines.find((routine) => normalizeLaunchText(routine.title).includes("day a")) ??
+    routines[0]!;
+  const orderedRoutines = putDefaultRoutineFirst(routines, defaultRoutine.id);
+
+  return {
+    kind: "health_workout",
+    defaultOptionId: defaultRoutine.id,
+    options: orderedRoutines.map((routine) => ({
+      id: routine.id,
+      routineTemplateId: routine.id,
+      title: { en: routine.title, vi: routine.title },
+      detail: routine.estimatedDurationMin ? { en: `${routine.estimatedDurationMin} min`, vi: `${routine.estimatedDurationMin} phut` } : undefined,
+      isDefault: routine.id === defaultRoutine.id,
+    })),
+  };
+}
+
+export async function buildGolfPracticeLaunchConfig(
+  app: WaymarkAppServices,
+  mark: MarkInstance,
+): Promise<TodayMarkActionSheetConfig["launchConfig"]> {
+  const routines = (await app.repositories.strength.listRoutinesByPath(mark.pathId))
+    .filter((routine) => routine.isActive && routine.routineType === WorkoutRoutineType.GolfPractice)
+    .sort((left, right) => left.title.localeCompare(right.title));
+  if (routines.length === 0) {
+    return undefined;
+  }
+
+  const defaultType = resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) ?? "putting";
+  const defaultRoutine =
+    (mark.templateId ? routines.find((routine) => routine.markTemplateId === mark.templateId) : undefined) ??
+    routines.find((routine) => normalizeLaunchText(routine.title) === normalizeLaunchText(mark.title)) ??
+    routines.find((routine) => isMatchingGolfPracticeRoutine(mark.title, routine.title)) ??
+    (defaultType === "swing" ? routines.find((routine) => normalizeLaunchText(routine.title).includes("swing")) : undefined) ??
+    routines.find((routine) => normalizeLaunchText(routine.title).includes("putting 23 putts")) ??
+    routines[0]!;
+  const orderedRoutines = putDefaultRoutineFirst(routines, defaultRoutine.id);
+
+  return {
+    kind: "golf_practice",
+    defaultOptionId: defaultRoutine.id,
+    options: orderedRoutines.map((routine) => ({
+      id: routine.id,
+      routineTemplateId: routine.id,
+      title: { en: routine.title, vi: routine.title },
+      detail: routine.estimatedDurationMin ? { en: `${routine.estimatedDurationMin} min`, vi: `${routine.estimatedDurationMin} phut` } : undefined,
+      isDefault: routine.id === defaultRoutine.id,
+    })),
+  };
+}
+
+function normalizeLaunchText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isWorkoutMinimalBodyweightRoutine(markTitle: string, routine: WorkoutRoutineTemplate) {
+  const normalizedMarkTitle = normalizeLaunchText(markTitle);
+  if (!normalizedMarkTitle.includes("workout minimal")) {
+    return false;
+  }
+  const normalizedRoutineTitle = normalizeLaunchText(routine.title);
+  return normalizedRoutineTitle.includes("body weight rep progress") || normalizedRoutineTitle.includes("bodyweight rep progress");
+}
+
+function putDefaultRoutineFirst(routines: WorkoutRoutineTemplate[], defaultRoutineId: string) {
+  return [...routines].sort((left, right) => {
+    if (left.id === defaultRoutineId) {
+      return right.id === defaultRoutineId ? 0 : -1;
+    }
+    if (right.id === defaultRoutineId) {
+      return 1;
+    }
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function isMatchingGolfPracticeRoutine(markTitle: string, routineTitle: string) {
+  const normalizedMarkTitle = normalizeGolfLaunchText(markTitle);
+  const normalizedRoutineTitle = normalizeGolfLaunchText(routineTitle);
+  if (normalizedMarkTitle.includes("putt")) {
+    return normalizedRoutineTitle.includes("putting 23 putts");
+  }
+  if (!normalizedMarkTitle.includes("chipping")) {
+    return false;
+  }
+  if (normalizedMarkTitle.includes("3 5 7")) {
+    return normalizedRoutineTitle.includes("chipping 3 5 7");
+  }
+  const distance = normalizedMarkTitle.match(/chipping ([357]) m/)?.[1];
+  return Boolean(distance && normalizedRoutineTitle.includes(`chipping ${distance} m`));
+}
+
+function normalizeGolfLaunchText(value: string) {
+  return normalizeLaunchText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function mapPackCheckItemInstance(item: PackCheckItemInstance): PackCheckItem {

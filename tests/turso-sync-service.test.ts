@@ -298,6 +298,42 @@ async function turso_turso_cursor_failure_is_treated_as_transient() {
   }
 }
 
+async function turso_manual_upload_skips_turso_primary_outbox_rows() {
+  const harness = await createHarness();
+  try {
+    await enqueueSyncOutboxMutation(harness.db as any, {
+      vaultId: "vault_1",
+      deviceId: "device_1",
+      dbInstanceId: "db_1",
+      entityType: "week_plan_item",
+      entityId: "remote_owned_item_1",
+      operation: "update",
+      localRevision: 1,
+      payload: { id: "remote_owned_item_1", title: "Should not upload" },
+      now: 1,
+    });
+    await enqueueMemory(harness.db, "memory_after_skip", 2);
+    const adapter = new FakeRemoteUploadAdapter();
+
+    const result = await uploadWaymarkOutboxToTurso({
+      executor: harness.db as any,
+      adapter,
+      vaultId: "vault_1",
+      trigger: "manual_upload",
+      now: () => 70,
+    });
+    const rows = await harness.db.getAllAsync<SyncOutboxRow>("SELECT * FROM sync_outbox ORDER BY created_at ASC;");
+
+    assert.equal(result.skipped.length, 1);
+    assert.equal(result.skipped[0]?.entityType, "week_plan_item");
+    assert.equal(result.attempted, 1);
+    assert.deepEqual(adapter.pushedRows.map((row) => row.entity_type), ["memory"]);
+    assert.deepEqual(rows.map((row) => row.status), ["synced", "synced"]);
+  } finally {
+    harness.close();
+  }
+}
+
 async function run() {
   await turso_manual_upload_pushes_pending_outbox_in_order();
   await turso_eod_upload_uses_same_batch_service();
@@ -305,6 +341,7 @@ async function run() {
   await turso_retry_same_outbox_row_does_not_duplicate_remote_record();
   await turso_transient_network_failure_retries_then_stops_batch_early();
   await turso_turso_cursor_failure_is_treated_as_transient();
+  await turso_manual_upload_skips_turso_primary_outbox_rows();
 }
 
 void run()

@@ -21,7 +21,7 @@ function slot(
     blockKey,
     expeditionRef,
     milestoneRef,
-    note,
+    description: note,
   };
 }
 
@@ -132,6 +132,7 @@ export async function importWeeklyTimetable20260615To0621(
     weekEndDate: "2026-06-21",
     note: "Imported from approved weekly timetable 2026-06-15 to 2026-06-21 using path, expedition, and milestone refs.",
     importBatchId: "weekly_timetable_2026_06_15_2026_06_21_approved_refs",
+    allowTitleRefs: true,
     items: WEEKLY_TIMETABLE_2026_06_15_TO_06_21,
   });
 }

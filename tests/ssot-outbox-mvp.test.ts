@@ -98,7 +98,7 @@ async function runExecutablePhase1Tests() {
     try {
       const report = await verifyWaymarkSchemaAsync(harness.db as any);
       assert.equal(report.ok, true);
-      assert.equal(report.expectedSchemaVersion, 21);
+      assert.equal(report.expectedSchemaVersion, 23);
       assert.equal(report.missingTables.includes("sync_outbox"), false);
       assert.equal(report.missingTables.includes("sync_tombstones"), false);
       assert.equal(report.missingTables.includes("mark_instance_details"), false);

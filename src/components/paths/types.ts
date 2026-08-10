@@ -67,13 +67,55 @@ export type PathDetailItem = {
   pulseMetrics?: PathPulseMetric[];
 };
 
-export type WeeklyMilestoneUrgency = "overdue" | "due_this_week" | "ahead" | "no_target";
-
-export type WeeklyMilestoneMarkItem = {
+export type PathDetailMilestoneItem = {
   id: string;
   title: string;
-  weekdayLabel: string;
-  completed: boolean;
+  description?: string;
+  status: "active" | "planned" | "completed" | "missed" | "archived";
+  startDate?: string;
+  targetDate?: string;
+  completedAt?: string;
+  sortOrder: number;
+  orderIndex?: number;
+  marks: PathDetailMarkItem[];
+};
+
+export type PathDetailMarkItem = {
+  id: string;
+  title: string;
+  status:
+    | "planned"
+    | "ready"
+    | "blocked"
+    | "active"
+    | "completed"
+    | "partially_completed"
+    | "skipped"
+    | "rescheduled"
+    | "substituted"
+    | "expired"
+    | "cancelled";
+  scheduledStartAt?: string;
+  scheduledEndAt?: string;
+  dueAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  sortTime: string;
+  isDone: boolean;
+  isFinal: boolean;
+};
+
+export type PathDetailExpeditionItem = {
+  id: string;
+  pathId: PathId;
+  title: string;
+  description?: string;
+  status: "active" | "planned" | "paused" | "completed" | "archived";
+  startDate?: string;
+  targetDate?: string;
+  sortOrder: number;
+  milestones: PathDetailMilestoneItem[];
+  unassignedMarks: PathDetailMarkItem[];
 };
 
 export type WeeklyMilestoneItem = {
@@ -84,20 +126,41 @@ export type WeeklyMilestoneItem = {
   pathAccent: string;
   pathAccentDeep: string;
   pathAccentSoft: string;
+  pathIconAssetId?: string;
   pathIconSemanticName: import("../../design/waymark-icon-map").WaymarkSemanticIconName;
   expeditionId: string;
   expeditionTitle: string;
   title: string;
   startDate: string | null;
-  targetDate: string | null;
-  targetDateLabel: string;
-  urgency: WeeklyMilestoneUrgency;
-  marks: WeeklyMilestoneMarkItem[];
+  endDate: string | null;
+  completedAt: string | null;
+  status: "active" | "planned" | "completed" | "missed" | "archived";
   sortOrder: number;
+  marks: WeeklyMilestoneMarkItem[];
 };
 
-export type WeeklyMilestonePathFilterItem = {
-  id: "all" | PathId;
-  label: string;
-  count: number;
+export type WeeklyMilestoneMarkItem = {
+  id: string;
+  title: string;
+  status:
+    | "planned"
+    | "ready"
+    | "blocked"
+    | "active"
+    | "completed"
+    | "partially_completed"
+    | "skipped"
+    | "rescheduled"
+    | "substituted"
+    | "expired"
+    | "cancelled";
+  localDate: string;
+  dayLabel: string;
+  isDone: boolean;
+  expeditionTitle?: string;
+  milestoneTitle?: string;
+  description?: string;
+  scheduledStartAt?: string;
+  scheduledEndAt?: string;
+  dueAt?: string;
 };

@@ -1,6 +1,12 @@
 import { createClient, type Client, type InStatement } from "@tursodatabase/serverless/compat";
 import type { SyncOutboxRow } from "./ssotOutbox";
 import type { TursoProjectionRecord } from "./tursoProjection";
+import { getWaymarkTursoCatalogSchemaSql } from "./tursoCatalogSchema";
+import { getWaymarkTursoFullDatabaseSchemaSql } from "./tursoFullDatabaseSchema";
+import {
+  WAYMARK_TURSO_CHATGPT_CONTEXT_VIEW_NAMES,
+  getWaymarkTursoPlanningContextSchemaSql,
+} from "./tursoPlanningContextSchema";
 import {
   getWaymarkTursoPlanningSchemaSql,
   WAYMARK_TURSO_DEV_CLEAR_TABLES,
@@ -59,6 +65,57 @@ type PlanningChangeRow = {
   created_at: number | bigint;
 };
 
+type PlanningMarkInstanceRow = {
+  id: string;
+  vault_id: string;
+  user_id: string;
+  path_id: string;
+  trail_day_id: string;
+  template_id: string | null;
+  expedition_id: string | null;
+  milestone_id: string | null;
+  title: string;
+  description: string | null;
+  origin: string;
+  status: string;
+  scheduled_start_at: number | bigint | null;
+  scheduled_end_at: number | bigint | null;
+  due_at: number | bigint | null;
+  completed_at: number | bigint | null;
+  skipped_at: number | bigint | null;
+  expired_at: number | bigint | null;
+  proof_note: string | null;
+  completion_summary: string | null;
+  substituted_by_mark_id: string | null;
+  rescheduled_to_mark_id: string | null;
+  source_backlog_item_id: string | null;
+  generation_key: string | null;
+  created_at: number | bigint;
+  updated_at: number | bigint;
+  deleted_at: number | bigint | null;
+};
+
+type PlanningTrailDayRow = {
+  id: string;
+  vault_id: string;
+  user_id: string;
+  local_date: string;
+  status: string;
+  anchor_path_id: string | null;
+  closed_at: number | bigint | null;
+  reopened_at: number | bigint | null;
+  close_summary: string | null;
+  tomorrow_first_step: string | null;
+  character_result: string | null;
+  planned_mark_count: number | bigint;
+  completed_mark_count: number | bigint;
+  skipped_mark_count: number | bigint;
+  memory_count: number | bigint;
+  created_at: number | bigint;
+  updated_at: number | bigint;
+  deleted_at: number | bigint | null;
+};
+
 export type TursoPlanningChangeRecord = {
   changeSequence: number;
   vaultId: string;
@@ -73,6 +130,8 @@ export type TursoPlanningChangeRecord = {
   mutationId: string | null;
   createdAt: number;
 };
+
+export type TursoPlanningHierarchyEntityType = "path" | "expedition" | "milestone";
 
 export type TursoPlanningWeekPlanSnapshot = {
   id: string;
@@ -160,6 +219,67 @@ export type TursoPlanningExpeditionSnapshot = {
   deletedAt: number | null;
 };
 
+export type TursoPlanningExpeditionProgressPatch = {
+  id: string;
+  vaultId: string;
+  status: string;
+  startDate: string | null;
+  targetDate: string | null;
+  startedAt: number | null;
+  targetEndAt: number | null;
+  completedAt: number | null;
+  updatedAt: number;
+};
+
+export type TursoPlanningMilestoneSnapshot = {
+  id: string;
+  vaultId: string;
+  userId: string;
+  expeditionId: string;
+  title: string;
+  description: string | null;
+  status: string;
+  startDate: string | null;
+  targetDate: string | null;
+  sortOrder: number;
+  orderIndex: number;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
+export type TursoPlanningMilestoneProgressPatch = {
+  id: string;
+  vaultId: string;
+  status: string;
+  startDate: string | null;
+  targetDate: string | null;
+  completedAt: number | null;
+  updatedAt: number;
+};
+
+export type TursoPlanningTrailDaySnapshot = {
+  id: string;
+  vaultId: string;
+  userId: string;
+  localDate: string;
+  status: string;
+  anchorPathId: string | null;
+  closedAt: number | null;
+  reopenedAt: number | null;
+  closeSummary: string | null;
+  tomorrowFirstStep: string | null;
+  characterResult: string | null;
+  plannedMarkCount: number;
+  completedMarkCount: number;
+  skippedMarkCount: number;
+  memoryCount: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
 export type TursoPlanningMarkInstanceSnapshot = {
   id: string;
   vaultId: string;
@@ -192,7 +312,7 @@ export type TursoPlanningMarkInstanceSnapshot = {
 
 export type TursoPlanningMutationResult = {
   changeSequence: number;
-  entityType: WaymarkTursoPlanningEntityType;
+  entityType: WaymarkTursoPlanningEntityType | "trail_day";
   entityId: string;
   mutationId: string;
   duplicate: boolean;
@@ -254,13 +374,14 @@ export function createWaymarkTursoClient(config: WaymarkTursoConfig): Client {
 }
 
 export function getWaymarkTursoRemoteSchemaSql(): string {
-  return `${REMOTE_SCHEMA_SQL}\n${getWaymarkTursoPlanningSchemaSql()}`;
+  return `${REMOTE_SCHEMA_SQL}\n${getWaymarkTursoPlanningSchemaSql()}\n${getWaymarkTursoCatalogSchemaSql()}\n${getWaymarkTursoFullDatabaseSchemaSql()}\n${getWaymarkTursoPlanningContextSchemaSql()}`;
 }
 
 export class WaymarkTursoRemoteAdapter {
   constructor(private readonly client: Client) {}
 
   async ensureSchema(): Promise<void> {
+    await dropPlanningContextViews(this.client);
     await repairPlanningSchemaResidue(this.client);
     await this.client.executeMultiple(getWaymarkTursoRemoteSchemaSql());
   }
@@ -695,14 +816,12 @@ export class WaymarkTursoRemoteAdapter {
     mutationId: string;
   }): Promise<TursoPlanningMutationResult> {
     const snapshot = input.snapshot;
-    return this.upsertReadOnlyPlanningSnapshot({
+    return this.upsertPlanningProjectionSnapshot({
       entityType: "path",
       entityId: snapshot.id,
       vaultId: snapshot.vaultId,
       deletedAt: snapshot.deletedAt,
-      updatedAt: snapshot.updatedAt,
       mutationId: input.mutationId,
-      payload: toPathPlanningPayload(snapshot),
       writeSnapshot: (tx) =>
         tx.execute({
           sql: `INSERT INTO paths (
@@ -754,35 +873,163 @@ export class WaymarkTursoRemoteAdapter {
     mutationId: string;
   }): Promise<TursoPlanningMutationResult> {
     const snapshot = input.snapshot;
-    return this.upsertReadOnlyPlanningSnapshot({
+    return this.updatePlanningExpeditionProgressPatch({
+      mutationId: input.mutationId,
+      patch: {
+        id: snapshot.id,
+        vaultId: snapshot.vaultId,
+        status: snapshot.status,
+        startDate: snapshot.startDate,
+        targetDate: snapshot.targetDate,
+        startedAt: snapshot.startedAt,
+        targetEndAt: snapshot.targetEndAt,
+        completedAt: snapshot.completedAt,
+        updatedAt: snapshot.updatedAt,
+      },
+    });
+  }
+
+  async upsertPlanningMilestoneSnapshot(input: {
+    snapshot: TursoPlanningMilestoneSnapshot;
+    mutationId: string;
+  }): Promise<TursoPlanningMutationResult> {
+    const snapshot = input.snapshot;
+    return this.updatePlanningMilestoneProgressPatch({
+      mutationId: input.mutationId,
+      patch: {
+        id: snapshot.id,
+        vaultId: snapshot.vaultId,
+        status: snapshot.status,
+        startDate: snapshot.startDate,
+        targetDate: snapshot.targetDate,
+        completedAt: snapshot.completedAt,
+        updatedAt: snapshot.updatedAt,
+      },
+    });
+  }
+
+  async updatePlanningExpeditionProgressPatch(input: {
+    patch: TursoPlanningExpeditionProgressPatch;
+    mutationId: string;
+  }): Promise<TursoPlanningMutationResult> {
+    const patch = input.patch;
+    return this.updatePlanningPrimaryProgressPatch({
       entityType: "expedition",
+      entityId: patch.id,
+      vaultId: patch.vaultId,
+      mutationId: input.mutationId,
+      updatePatch: async (tx) => {
+        const existing = await tx.execute({
+          sql: `SELECT id FROM expeditions WHERE vault_id = ? AND id = ? LIMIT 1;`,
+          args: [patch.vaultId, patch.id],
+        });
+        if (existing.rows.length === 0) {
+          throw new Error(`Cannot update expedition progress ${patch.id}: missing Turso primary row.`);
+        }
+        await tx.execute({
+          sql: `UPDATE expeditions
+                SET status = ?,
+                    start_date = ?,
+                    target_date = ?,
+                    started_at = ?,
+                    target_end_at = ?,
+                    completed_at = ?,
+                    updated_at = ?,
+                    last_mutation_id = ?
+                WHERE vault_id = ? AND id = ?;`,
+          args: [
+            patch.status,
+            patch.startDate,
+            patch.targetDate,
+            patch.startedAt,
+            patch.targetEndAt,
+            patch.completedAt,
+            patch.updatedAt,
+            input.mutationId,
+            patch.vaultId,
+            patch.id,
+          ],
+        });
+      },
+    });
+  }
+
+  async updatePlanningMilestoneProgressPatch(input: {
+    patch: TursoPlanningMilestoneProgressPatch;
+    mutationId: string;
+  }): Promise<TursoPlanningMutationResult> {
+    const patch = input.patch;
+    return this.updatePlanningPrimaryProgressPatch({
+      entityType: "milestone",
+      entityId: patch.id,
+      vaultId: patch.vaultId,
+      mutationId: input.mutationId,
+      updatePatch: async (tx) => {
+        const existing = await tx.execute({
+          sql: `SELECT id FROM milestones WHERE vault_id = ? AND id = ? LIMIT 1;`,
+          args: [patch.vaultId, patch.id],
+        });
+        if (existing.rows.length === 0) {
+          throw new Error(`Cannot update milestone progress ${patch.id}: missing Turso primary row.`);
+        }
+        await tx.execute({
+          sql: `UPDATE milestones
+                SET status = ?,
+                    start_date = ?,
+                    target_date = ?,
+                    completed_at = ?,
+                    updated_at = ?,
+                    last_mutation_id = ?
+                WHERE vault_id = ? AND id = ?;`,
+          args: [
+            patch.status,
+            patch.startDate,
+            patch.targetDate,
+            patch.completedAt,
+            patch.updatedAt,
+            input.mutationId,
+            patch.vaultId,
+            patch.id,
+          ],
+        });
+      },
+    });
+  }
+
+  async upsertPlanningTrailDaySnapshot(input: {
+    snapshot: TursoPlanningTrailDaySnapshot;
+    mutationId: string;
+  }): Promise<TursoPlanningMutationResult> {
+    const snapshot = input.snapshot;
+    return this.upsertReadOnlyPlanningSnapshot({
+      entityType: "trail_day",
       entityId: snapshot.id,
       vaultId: snapshot.vaultId,
       deletedAt: snapshot.deletedAt,
       updatedAt: snapshot.updatedAt,
       mutationId: input.mutationId,
-      payload: toExpeditionPlanningPayload(snapshot),
+      payload: toTrailDayPlanningPayload(snapshot),
       writeSnapshot: (tx) =>
         tx.execute({
-          sql: `INSERT INTO expeditions (
-            id, vault_id, user_id, path_id, title, purpose, description, status,
-            sort_order, start_date, target_date, started_at, target_end_at,
-            completed_at, hero_media_asset_id, created_at, updated_at,
-            deleted_at, last_mutation_id
+          sql: `INSERT INTO trail_days (
+            id, vault_id, user_id, local_date, status, anchor_path_id, closed_at,
+            reopened_at, close_summary, tomorrow_first_step, character_result,
+            planned_mark_count, completed_mark_count, skipped_mark_count,
+            memory_count, created_at, updated_at, deleted_at, last_mutation_id
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(vault_id, id) DO UPDATE SET
-            path_id = excluded.path_id,
-            title = excluded.title,
-            purpose = excluded.purpose,
-            description = excluded.description,
+            local_date = excluded.local_date,
             status = excluded.status,
-            sort_order = excluded.sort_order,
-            start_date = excluded.start_date,
-            target_date = excluded.target_date,
-            started_at = excluded.started_at,
-            target_end_at = excluded.target_end_at,
-            completed_at = excluded.completed_at,
-            hero_media_asset_id = excluded.hero_media_asset_id,
+            anchor_path_id = excluded.anchor_path_id,
+            closed_at = excluded.closed_at,
+            reopened_at = excluded.reopened_at,
+            close_summary = excluded.close_summary,
+            tomorrow_first_step = excluded.tomorrow_first_step,
+            character_result = excluded.character_result,
+            planned_mark_count = excluded.planned_mark_count,
+            completed_mark_count = excluded.completed_mark_count,
+            skipped_mark_count = excluded.skipped_mark_count,
+            memory_count = excluded.memory_count,
             updated_at = excluded.updated_at,
             deleted_at = excluded.deleted_at,
             last_mutation_id = excluded.last_mutation_id;`,
@@ -790,18 +1037,18 @@ export class WaymarkTursoRemoteAdapter {
             snapshot.id,
             snapshot.vaultId,
             snapshot.userId,
-            snapshot.pathId,
-            snapshot.title,
-            snapshot.purpose,
-            snapshot.description,
+            snapshot.localDate,
             snapshot.status,
-            snapshot.sortOrder,
-            snapshot.startDate,
-            snapshot.targetDate,
-            snapshot.startedAt,
-            snapshot.targetEndAt,
-            snapshot.completedAt,
-            snapshot.heroMediaAssetId,
+            snapshot.anchorPathId,
+            snapshot.closedAt,
+            snapshot.reopenedAt,
+            snapshot.closeSummary,
+            snapshot.tomorrowFirstStep,
+            snapshot.characterResult,
+            snapshot.plannedMarkCount,
+            snapshot.completedMarkCount,
+            snapshot.skippedMarkCount,
+            snapshot.memoryCount,
             snapshot.createdAt,
             snapshot.updatedAt,
             snapshot.deletedAt,
@@ -955,6 +1202,121 @@ export class WaymarkTursoRemoteAdapter {
         createdAt: toNumber(remoteRow.created_at),
       };
     });
+  }
+
+  async listActivePlanningHierarchyEntityIds(input: {
+    vaultId: string;
+    entityType: TursoPlanningHierarchyEntityType;
+    pageSize?: number;
+  }): Promise<string[]> {
+    const tableName =
+      input.entityType === "path" ? "paths"
+      : input.entityType === "expedition" ? "expeditions"
+      : "milestones";
+    const pageSize = Math.max(1, input.pageSize ?? 500);
+    const ids: string[] = [];
+    let afterId = "";
+
+    while (true) {
+      const result = await this.client.execute({
+        sql: `SELECT id
+              FROM ${tableName}
+              WHERE vault_id = ?
+                AND deleted_at IS NULL
+                AND id > ?
+              ORDER BY id ASC
+              LIMIT ?;`,
+        args: [input.vaultId, afterId, pageSize],
+      });
+      const page = result.rows.map((row) => String((row as unknown as { id: string }).id));
+      if (page.length === 0) {
+        break;
+      }
+      ids.push(...page);
+      const lastId = page[page.length - 1]!;
+      if (lastId <= afterId) {
+        throw new Error(`Turso ${tableName} pagination did not advance after id ${afterId}.`);
+      }
+      afterId = lastId;
+    }
+
+    return ids;
+  }
+
+  async listAllPlanningMarkInstanceSnapshots(input: {
+    vaultId: string;
+    pageSize?: number;
+  }): Promise<TursoPlanningMarkInstanceSnapshot[]> {
+    const pageSize = Math.max(1, input.pageSize ?? 500);
+    const snapshots: TursoPlanningMarkInstanceSnapshot[] = [];
+    let afterId = "";
+
+    while (true) {
+      const result = await this.client.execute({
+        sql: `SELECT
+                id, vault_id, user_id, path_id, trail_day_id, template_id,
+                expedition_id, milestone_id, title, description, origin, status,
+                scheduled_start_at, scheduled_end_at, due_at, completed_at,
+                skipped_at, expired_at, proof_note, completion_summary,
+                substituted_by_mark_id, rescheduled_to_mark_id, source_backlog_item_id,
+                generation_key, created_at, updated_at, deleted_at
+              FROM mark_instances
+              WHERE vault_id = ?
+                AND id > ?
+              ORDER BY id ASC
+              LIMIT ?;`,
+        args: [input.vaultId, afterId, pageSize],
+      });
+      const page = result.rows.map((row) => toPlanningMarkInstanceSnapshot(row as unknown as PlanningMarkInstanceRow));
+      if (page.length === 0) {
+        break;
+      }
+      snapshots.push(...page);
+      const lastId = page[page.length - 1]!.id;
+      if (lastId <= afterId) {
+        throw new Error(`Turso mark_instances pagination did not advance after id ${afterId}.`);
+      }
+      afterId = lastId;
+    }
+
+    return snapshots;
+  }
+
+  async listAllPlanningTrailDaySnapshots(input: {
+    vaultId: string;
+    pageSize?: number;
+  }): Promise<TursoPlanningTrailDaySnapshot[]> {
+    const pageSize = Math.max(1, input.pageSize ?? 500);
+    const snapshots: TursoPlanningTrailDaySnapshot[] = [];
+    let afterId = "";
+
+    while (true) {
+      const result = await this.client.execute({
+        sql: `SELECT
+                id, vault_id, user_id, local_date, status, anchor_path_id,
+                closed_at, reopened_at, close_summary, tomorrow_first_step,
+                character_result, planned_mark_count, completed_mark_count,
+                skipped_mark_count, memory_count, created_at, updated_at, deleted_at
+              FROM trail_days
+              WHERE vault_id = ?
+                AND id > ?
+              ORDER BY id ASC
+              LIMIT ?;`,
+        args: [input.vaultId, afterId, pageSize],
+      });
+      const page = result.rows.map((row) => toPlanningTrailDaySnapshot(row as unknown as PlanningTrailDayRow));
+      if (page.length === 0) {
+        break;
+      }
+      snapshots.push(...page);
+      const lastId = page[page.length - 1]!.id;
+      if (lastId <= afterId) {
+        throw new Error(`Turso trail_days pagination did not advance after id ${afterId}.`);
+      }
+      afterId = lastId;
+    }
+
+    return snapshots;
   }
 
   async upsertRemoteEdit(input: Omit<TursoProjectionRecord, "remoteRevision" | "lastIdempotencyKey">): Promise<TursoProjectionRecord> {
@@ -1129,8 +1491,148 @@ export class WaymarkTursoRemoteAdapter {
     return (result.rows[0] as unknown as Record<string, unknown> | undefined) ?? null;
   }
 
+  private async upsertPlanningProjectionSnapshot(input: {
+    entityType: "path" | "expedition" | "milestone";
+    entityId: string;
+    vaultId: string;
+    deletedAt: number | null;
+    mutationId: string;
+    writeSnapshot(tx: TursoTransactionLike): Promise<unknown>;
+  }): Promise<TursoPlanningMutationResult> {
+    const existing = await this.findPlanningIdempotency(input.mutationId);
+    if (existing) {
+      return {
+        changeSequence: toNumber(existing.change_sequence as number | bigint),
+        entityType: input.entityType,
+        entityId: String(existing.entity_id),
+        mutationId: input.mutationId,
+        duplicate: true,
+      };
+    }
+
+    const tx = await this.client.transaction("write");
+    try {
+      await input.writeSnapshot(tx);
+      const change = await tx.execute({
+        sql: `SELECT MAX(change_sequence) AS change_sequence
+              FROM waymark_planning_change_log
+              WHERE vault_id = ? AND entity_type = ? AND entity_id = ?;`,
+        args: [input.vaultId, input.entityType, input.entityId],
+      });
+      const changeRow = change.rows[0] as unknown as { change_sequence?: number | bigint } | undefined;
+      const changeSequence = toNumber(changeRow?.change_sequence);
+      if (changeSequence <= 0) {
+        throw new Error(`No typed planning change was recorded for ${input.entityType} ${input.entityId}.`);
+      }
+
+      await tx.execute({
+        sql: `INSERT INTO waymark_planning_idempotency (
+          mutation_id,
+          vault_id,
+          entity_type,
+          entity_id,
+          operation,
+          change_sequence,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        args: [
+          input.mutationId,
+          input.vaultId,
+          input.entityType,
+          input.entityId,
+          input.deletedAt === null ? "update" : "delete",
+          changeSequence,
+          Date.now(),
+        ],
+      });
+
+      await tx.commit();
+      return {
+        changeSequence,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        mutationId: input.mutationId,
+        duplicate: false,
+      };
+    } catch (error) {
+      await rollbackTursoTransaction(tx, "[Waymark Turso] Planning projection transaction rollback failed after push error.");
+      throw error;
+    } finally {
+      tx.close();
+    }
+  }
+
+  private async updatePlanningPrimaryProgressPatch(input: {
+    entityType: "expedition" | "milestone";
+    entityId: string;
+    vaultId: string;
+    mutationId: string;
+    updatePatch(tx: TursoTransactionLike): Promise<unknown>;
+  }): Promise<TursoPlanningMutationResult> {
+    const existing = await this.findPlanningIdempotency(input.mutationId);
+    if (existing) {
+      return {
+        changeSequence: toNumber(existing.change_sequence as number | bigint),
+        entityType: input.entityType,
+        entityId: String(existing.entity_id),
+        mutationId: input.mutationId,
+        duplicate: true,
+      };
+    }
+
+    const tx = await this.client.transaction("write");
+    try {
+      await input.updatePatch(tx);
+      const change = await tx.execute({
+        sql: `SELECT MAX(change_sequence) AS change_sequence
+              FROM waymark_planning_change_log
+              WHERE vault_id = ? AND entity_type = ? AND entity_id = ?;`,
+        args: [input.vaultId, input.entityType, input.entityId],
+      });
+      const changeRow = change.rows[0] as unknown as { change_sequence?: number | bigint } | undefined;
+      const changeSequence = toNumber(changeRow?.change_sequence);
+      if (changeSequence <= 0) {
+        throw new Error(`No typed planning progress change was recorded for ${input.entityType} ${input.entityId}.`);
+      }
+
+      await tx.execute({
+        sql: `INSERT INTO waymark_planning_idempotency (
+          mutation_id,
+          vault_id,
+          entity_type,
+          entity_id,
+          operation,
+          change_sequence,
+          created_at
+        ) VALUES (?, ?, ?, ?, 'update', ?, ?);`,
+        args: [
+          input.mutationId,
+          input.vaultId,
+          input.entityType,
+          input.entityId,
+          changeSequence,
+          Date.now(),
+        ],
+      });
+
+      await tx.commit();
+      return {
+        changeSequence,
+        entityType: input.entityType,
+        entityId: input.entityId,
+        mutationId: input.mutationId,
+        duplicate: false,
+      };
+    } catch (error) {
+      await rollbackTursoTransaction(tx, "[Waymark Turso] Planning progress transaction rollback failed after push error.");
+      throw error;
+    } finally {
+      tx.close();
+    }
+  }
+
   private async upsertReadOnlyPlanningSnapshot(input: {
-    entityType: "path" | "expedition" | "mark_instance";
+    entityType: "path" | "expedition" | "milestone" | "trail_day" | "mark_instance";
     entityId: string;
     vaultId: string;
     deletedAt: number | null;
@@ -1305,6 +1807,51 @@ function toExpeditionPlanningPayload(snapshot: TursoPlanningExpeditionSnapshot):
   };
 }
 
+function toMilestonePlanningPayload(snapshot: TursoPlanningMilestoneSnapshot): Record<string, unknown> {
+  return {
+    id: snapshot.id,
+    vault_id: snapshot.vaultId,
+    user_id: snapshot.userId,
+    expedition_id: snapshot.expeditionId,
+    title: snapshot.title,
+    description: snapshot.description,
+    status: snapshot.status,
+    start_date: snapshot.startDate,
+    target_date: snapshot.targetDate,
+    sort_order: snapshot.sortOrder,
+    order_index: snapshot.orderIndex,
+    completed_at: snapshot.completedAt,
+    entity_revision: 1,
+    created_at: snapshot.createdAt,
+    updated_at: snapshot.updatedAt,
+    deleted_at: snapshot.deletedAt,
+  };
+}
+
+function toTrailDayPlanningPayload(snapshot: TursoPlanningTrailDaySnapshot): Record<string, unknown> {
+  return {
+    id: snapshot.id,
+    vault_id: snapshot.vaultId,
+    user_id: snapshot.userId,
+    local_date: snapshot.localDate,
+    status: snapshot.status,
+    anchor_path_id: snapshot.anchorPathId,
+    closed_at: snapshot.closedAt,
+    reopened_at: snapshot.reopenedAt,
+    close_summary: snapshot.closeSummary,
+    tomorrow_first_step: snapshot.tomorrowFirstStep,
+    character_result: snapshot.characterResult,
+    planned_mark_count: snapshot.plannedMarkCount,
+    completed_mark_count: snapshot.completedMarkCount,
+    skipped_mark_count: snapshot.skippedMarkCount,
+    memory_count: snapshot.memoryCount,
+    entity_revision: 1,
+    created_at: snapshot.createdAt,
+    updated_at: snapshot.updatedAt,
+    deleted_at: snapshot.deletedAt,
+  };
+}
+
 function toMarkInstancePlanningPayload(snapshot: TursoPlanningMarkInstanceSnapshot): Record<string, unknown> {
   return {
     id: snapshot.id,
@@ -1335,6 +1882,61 @@ function toMarkInstancePlanningPayload(snapshot: TursoPlanningMarkInstanceSnapsh
     created_at: snapshot.createdAt,
     updated_at: snapshot.updatedAt,
     deleted_at: snapshot.deletedAt,
+  };
+}
+
+function toPlanningMarkInstanceSnapshot(row: PlanningMarkInstanceRow): TursoPlanningMarkInstanceSnapshot {
+  return {
+    id: String(row.id),
+    vaultId: String(row.vault_id),
+    userId: String(row.user_id),
+    pathId: String(row.path_id),
+    trailDayId: String(row.trail_day_id),
+    templateId: row.template_id === null ? null : String(row.template_id),
+    expeditionId: row.expedition_id === null ? null : String(row.expedition_id),
+    milestoneId: row.milestone_id === null ? null : String(row.milestone_id),
+    title: String(row.title),
+    description: row.description === null ? null : String(row.description),
+    origin: String(row.origin),
+    status: String(row.status),
+    scheduledStartAt: row.scheduled_start_at === null ? null : toNumber(row.scheduled_start_at),
+    scheduledEndAt: row.scheduled_end_at === null ? null : toNumber(row.scheduled_end_at),
+    dueAt: row.due_at === null ? null : toNumber(row.due_at),
+    completedAt: row.completed_at === null ? null : toNumber(row.completed_at),
+    skippedAt: row.skipped_at === null ? null : toNumber(row.skipped_at),
+    expiredAt: row.expired_at === null ? null : toNumber(row.expired_at),
+    proofNote: row.proof_note === null ? null : String(row.proof_note),
+    completionSummary: row.completion_summary === null ? null : String(row.completion_summary),
+    substitutedByMarkId: row.substituted_by_mark_id === null ? null : String(row.substituted_by_mark_id),
+    rescheduledToMarkId: row.rescheduled_to_mark_id === null ? null : String(row.rescheduled_to_mark_id),
+    sourceBacklogItemId: row.source_backlog_item_id === null ? null : String(row.source_backlog_item_id),
+    generationKey: row.generation_key === null ? null : String(row.generation_key),
+    createdAt: toNumber(row.created_at),
+    updatedAt: toNumber(row.updated_at),
+    deletedAt: row.deleted_at === null ? null : toNumber(row.deleted_at),
+  };
+}
+
+function toPlanningTrailDaySnapshot(row: PlanningTrailDayRow): TursoPlanningTrailDaySnapshot {
+  return {
+    id: String(row.id),
+    vaultId: String(row.vault_id),
+    userId: String(row.user_id),
+    localDate: String(row.local_date),
+    status: String(row.status),
+    anchorPathId: row.anchor_path_id === null ? null : String(row.anchor_path_id),
+    closedAt: row.closed_at === null ? null : toNumber(row.closed_at),
+    reopenedAt: row.reopened_at === null ? null : toNumber(row.reopened_at),
+    closeSummary: row.close_summary === null ? null : String(row.close_summary),
+    tomorrowFirstStep: row.tomorrow_first_step === null ? null : String(row.tomorrow_first_step),
+    characterResult: row.character_result === null ? null : String(row.character_result),
+    plannedMarkCount: toNumber(row.planned_mark_count),
+    completedMarkCount: toNumber(row.completed_mark_count),
+    skippedMarkCount: toNumber(row.skipped_mark_count),
+    memoryCount: toNumber(row.memory_count),
+    createdAt: toNumber(row.created_at),
+    updatedAt: toNumber(row.updated_at),
+    deletedAt: row.deleted_at === null ? null : toNumber(row.deleted_at),
   };
 }
 
@@ -1378,6 +1980,12 @@ async function repairPlanningSchemaResidue(client: Pick<Client, "execute">): Pro
   await restoreInterruptedPlanningTableRename(client, "waymark_planning_change_log");
 }
 
+async function dropPlanningContextViews(client: Pick<Client, "execute">): Promise<void> {
+  for (const viewName of WAYMARK_TURSO_CHATGPT_CONTEXT_VIEW_NAMES) {
+    await client.execute(`DROP VIEW IF EXISTS ${viewName};`);
+  }
+}
+
 async function dropPlanningTriggers(client: Pick<Client, "execute">): Promise<void> {
   for (const triggerName of [
     "trg_turso_week_plans_insert_log",
@@ -1386,6 +1994,15 @@ async function dropPlanningTriggers(client: Pick<Client, "execute">): Promise<vo
     "trg_turso_week_plan_items_insert_log",
     "trg_turso_week_plan_items_update_log",
     "trg_turso_week_plan_items_delete_log",
+    "trg_turso_paths_insert_log",
+    "trg_turso_paths_update_log",
+    "trg_turso_paths_delete_log",
+    "trg_turso_expeditions_insert_log",
+    "trg_turso_expeditions_update_log",
+    "trg_turso_expeditions_delete_log",
+    "trg_turso_milestones_insert_log",
+    "trg_turso_milestones_update_log",
+    "trg_turso_milestones_delete_log",
   ]) {
     await client.execute(`DROP TRIGGER IF EXISTS ${triggerName};`);
   }

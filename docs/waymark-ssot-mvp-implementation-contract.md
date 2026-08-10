@@ -6,7 +6,9 @@ Status: legacy MVP/outbound contract. Typed planning intake is superseded by `do
 
 Waymark remains local-first and phone-first.
 
-For runtime behavior, local SQLite is the operational source of truth. Waymark Vault is the logical ownership boundary for one user's data. Turso is a structured sync and restore layer. Google Drive is a media blob/artifact store. UI screens render selectors/view-models only.
+> Superseded architecture note: Turso Full-DB v2 in `waymark-source-of-truth-contract.md` now governs storage and sync. Historical implementation details below remain only for legacy-test context.
+
+For runtime reads, local SQLite is the operational cache. Turso is the sole structured-data source of truth for the Waymark Vault. Google Drive is a media blob/artifact store. UI screens render selectors/view-models from the cache only.
 
 Turso outbound upload is batch-driven, not real-time. Local writes create durable outbox rows, but the outbox may be drained only by EOD sync, an explicit Upload/Sync button, or a future user-approved scheduled batch job. Repository writes and screen save handlers must not push directly to Turso.
 

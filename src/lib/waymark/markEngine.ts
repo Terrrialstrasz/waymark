@@ -514,8 +514,14 @@ export class DefaultMarkEngine implements MarkEngine {
         userId: original.userId,
         pathId: input.substitutePathId ?? original.pathId,
         trailDayId: substituteTrailDay.id,
-        expeditionId: original.expeditionId ?? null,
-        milestoneId: original.milestoneId ?? null,
+        expeditionId:
+          input.substituteExpeditionId === undefined
+            ? original.expeditionId ?? null
+            : input.substituteExpeditionId,
+        milestoneId:
+          input.substituteMilestoneId === undefined
+            ? original.milestoneId ?? null
+            : input.substituteMilestoneId,
         title: input.substituteTitle,
         description: input.substituteDescription ?? null,
         origin: MarkInstanceOrigin.Substitution,

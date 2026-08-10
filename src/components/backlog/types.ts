@@ -22,7 +22,6 @@ export interface BacklogItemViewModel {
 
 export interface BacklogFeatureFlags {
   canDeleteBacklogItem?: boolean;
-  canAddToWeeklyCoding?: boolean;
   canCreateMarkFromBacklog?: boolean;
   hasBacklogDetail?: boolean;
 }

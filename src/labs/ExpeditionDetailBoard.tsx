@@ -30,6 +30,7 @@ export function ExpeditionDetailBoard({ locale }: Props) {
             onBack={() => Alert.alert("Back", "Expedition detail")}
             onMore={() => Alert.alert("More", "Expedition detail")}
             onOpenMarkDetail={(markId) => Alert.alert("Mark detail", markId)}
+            unassignedMarks={expeditionDetailScreenFixtures.active.unassignedMarks}
           />
           <ExpeditionDetailTemplate
             expedition={expeditionDetailScreenFixtures.completed.expedition}
@@ -68,7 +69,12 @@ export function ExpeditionDetailBoard({ locale }: Props) {
 
       <BoardSection title="MilestoneTimeline" subtitle="One expanded milestone and all collapsed states.">
         <View style={styles.stackSm}>
-          <MilestoneTimeline locale={locale} milestones={milestoneFixtures} onOpenMarkDetail={(markId) => Alert.alert("Mark detail", markId)} />
+          <MilestoneTimeline
+            locale={locale}
+            milestones={milestoneFixtures}
+            onOpenMarkDetail={(markId) => Alert.alert("Mark detail", markId)}
+            unassignedMarks={expeditionDetailScreenFixtures.active.unassignedMarks}
+          />
           <MilestoneTimeline
             locale={locale}
             milestones={milestoneFixtures.map((milestone) => ({

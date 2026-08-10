@@ -1,9 +1,25 @@
-import { ExpeditionDetailItem, ExpeditionMilestoneItem } from "../components/expeditions/types";
+import { ExpeditionDetailItem, ExpeditionMilestoneItem, ExpeditionNoMilestoneGroupItem, ExpeditionPlannedMarkItem } from "../components/expeditions/types";
 import type { Expedition, MarkInstance, Milestone, Path } from "../domain/waymark";
 import { ExpeditionStatus, MarkInstanceStatus, MilestoneStatus } from "../domain/waymark/enums";
 import type { Locale } from "../types/ui";
 import { mapUiPathId, pathLabelById } from "./waymarkUi";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
+
+export function groupExpeditionMarksByMilestone(milestones: Milestone[], marks: MarkInstance[]) {
+  const milestoneIds = new Set(milestones.map((milestone) => milestone.id));
+  const marksByMilestoneId = new Map<string, MarkInstance[]>(milestones.map((milestone) => [milestone.id, []]));
+  const unassignedMarks: MarkInstance[] = [];
+
+  for (const mark of marks) {
+    if (mark.milestoneId && milestoneIds.has(mark.milestoneId)) {
+      marksByMilestoneId.get(mark.milestoneId)?.push(mark);
+    } else {
+      unassignedMarks.push(mark);
+    }
+  }
+
+  return { marksByMilestoneId, unassignedMarks };
+}
 
 export function buildExpeditionDetailModel(
   expedition: Expedition,
@@ -11,12 +27,14 @@ export function buildExpeditionDetailModel(
   milestones: Milestone[],
   marksByMilestoneId: Map<string, MarkInstance[]>,
   locale: Locale,
-): { expedition: ExpeditionDetailItem; milestones: ExpeditionMilestoneItem[] } {
+  unassignedMarks: MarkInstance[] = [],
+): { expedition: ExpeditionDetailItem; milestones: ExpeditionMilestoneItem[]; unassignedMarks: ExpeditionNoMilestoneGroupItem | null } {
   return {
-    expedition: mapExpeditionDetail(expedition, path, milestones, marksByMilestoneId, locale),
-    milestones: milestones.map((milestone, index) =>
-      mapMilestoneDetail(milestone, index, marksByMilestoneId.get(milestone.id) ?? [], path, locale),
-    ),
+    expedition: mapExpeditionDetail(expedition, path, milestones, marksByMilestoneId, unassignedMarks, locale),
+    milestones: [...milestones]
+      .sort(compareMilestonesChronologically)
+      .map((milestone, index) => mapMilestoneDetail(milestone, index, marksByMilestoneId.get(milestone.id) ?? [], path, locale)),
+    unassignedMarks: mapNoMilestoneGroup(expedition.id, unassignedMarks, path, locale),
   };
 }
 
@@ -25,9 +43,10 @@ function mapExpeditionDetail(
   path: Path | null,
   milestones: Milestone[],
   marksByMilestoneId: Map<string, MarkInstance[]>,
+  unassignedMarks: MarkInstance[],
   locale: Locale,
 ): ExpeditionDetailItem {
-  const allMarks = milestones.flatMap((milestone) => marksByMilestoneId.get(milestone.id) ?? []);
+  const allMarks = [...milestones.flatMap((milestone) => marksByMilestoneId.get(milestone.id) ?? []), ...unassignedMarks];
   const completedMarks = allMarks.filter((mark) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length;
   const totalMarks = allMarks.length;
   const completedMilestones = milestones.filter((milestone) => milestone.status === MilestoneStatus.Completed).length;
@@ -72,8 +91,9 @@ function mapMilestoneDetail(
     id: milestone.id,
     number: index + 1,
     title: milestone.title,
-    startDate: milestone.targetDate,
+    startDate: milestone.startDate,
     endDate: milestone.targetDate,
+    completedAt: milestone.completedAt,
     status:
       milestone.status === MilestoneStatus.Completed
         ? "done"
@@ -84,15 +104,42 @@ function mapMilestoneDetail(
           : "upcoming",
     completedMarks: marks.filter((mark) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length,
     totalMarks: marks.length,
-    plannedMarks: marks.map((mark) => ({
-      id: mark.id,
-      title: mark.title,
-      subtitle: mark.description,
-      status: mapPlannedMarkStatus(mark.status),
-      pathId,
-      pathName,
-      timingLabel: formatMarkTimingLabel(mark),
-    })),
+    plannedMarks: marks.map((mark) => mapExpeditionPlannedMark(mark, pathId, pathName)),
+  };
+}
+
+function mapNoMilestoneGroup(
+  expeditionId: string,
+  marks: MarkInstance[],
+  path: Path | null,
+  locale: Locale,
+): ExpeditionNoMilestoneGroupItem | null {
+  if (marks.length === 0) {
+    return null;
+  }
+
+  const pathId = mapUiPathId(path?.slug, path?.title);
+  const pathName = path?.title ?? (pathId ? pathLabelById(pathId, locale) : "Path");
+
+  return {
+    id: `${expeditionId}:no-milestone`,
+    title: locale === "vi" ? "Khong co milestone" : "No milestone",
+    completedMarks: marks.filter((mark) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted).length,
+    totalMarks: marks.length,
+    plannedMarks: marks.map((mark) => mapExpeditionPlannedMark(mark, pathId, pathName)),
+  };
+}
+
+function mapExpeditionPlannedMark(mark: MarkInstance, pathId: ReturnType<typeof mapUiPathId>, pathName: string): ExpeditionPlannedMarkItem {
+  return {
+    id: mark.id,
+    title: mark.title,
+    subtitle: mark.description,
+    status: mapPlannedMarkStatus(mark.status),
+    pathId,
+    pathName,
+    timingLabel: formatMarkTimingLabel(mark),
+    sortTime: getMarkSortTime(mark),
   };
 }
 
@@ -117,17 +164,22 @@ function mapExpeditionStatus(status: ExpeditionStatus): ExpeditionDetailItem["st
 }
 
 function mapPlannedMarkStatus(status: MarkInstanceStatus) {
-  switch (status) {
-    case MarkInstanceStatus.Completed:
-      return "done";
-    case MarkInstanceStatus.PartiallyCompleted:
-      return "done";
-    case MarkInstanceStatus.Expired:
-      return "missed";
-    case MarkInstanceStatus.Active:
-    case MarkInstanceStatus.Ready:
-      return "planned";
-    default:
-      return "upcoming";
-  }
+  return status;
+}
+
+function compareMilestonesChronologically(left: Milestone, right: Milestone) {
+  return (
+    getMilestoneSortDate(left).localeCompare(getMilestoneSortDate(right)) ||
+    left.sortOrder - right.sortOrder ||
+    left.orderIndex - right.orderIndex ||
+    left.title.localeCompare(right.title)
+  );
+}
+
+function getMilestoneSortDate(milestone: Milestone) {
+  return milestone.startDate ?? milestone.targetDate ?? "9999-12-31";
+}
+
+function getMarkSortTime(mark: MarkInstance) {
+  return mark.scheduledStartAt ?? mark.dueAt ?? mark.completedAt ?? mark.createdAt;
 }

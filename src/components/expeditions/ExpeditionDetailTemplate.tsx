@@ -1,5 +1,5 @@
 import { StyleSheet, View } from "react-native";
-import { ExpeditionDetailItem, ExpeditionMilestoneActions, ExpeditionMilestoneItem } from "./types";
+import { ExpeditionDetailItem, ExpeditionMilestoneActions, ExpeditionMilestoneItem, ExpeditionNoMilestoneGroupItem } from "./types";
 import { Locale } from "../../types/ui";
 import { FieldJournalScreenShell } from "../primitives/FieldJournalScreenShell";
 import { ExpeditionHeader } from "./ExpeditionHeader";
@@ -15,6 +15,7 @@ import { WMEmptyState } from "../primitives/WMEmptyState";
 type Props = {
   expedition: ExpeditionDetailItem;
   milestones: ExpeditionMilestoneItem[];
+  unassignedMarks?: ExpeditionNoMilestoneGroupItem | null;
   locale?: Locale;
   loading?: boolean;
   error?: boolean;
@@ -26,6 +27,7 @@ type Props = {
 export function ExpeditionDetailTemplate({
   expedition,
   milestones,
+  unassignedMarks,
   locale = "en",
   loading = false,
   error = false,
@@ -54,6 +56,7 @@ export function ExpeditionDetailTemplate({
             onOpenMarkDetail={onOpenMarkDetail}
             onRescheduleMilestone={onRescheduleMilestone}
             onSkipMilestone={onSkipMilestone}
+            unassignedMarks={unassignedMarks}
           />
           {expedition.whyItMatters ? <WhyItMattersCard body={expedition.whyItMatters} locale={locale} /> : null}
         </>

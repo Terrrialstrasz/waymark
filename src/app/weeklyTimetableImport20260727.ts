@@ -109,7 +109,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
     allowOverlap,
   };
 }
@@ -248,6 +248,7 @@ export async function importWeeklyTimetable20260727To0802(
     weekEndDate: "2026-08-02",
     note: "Imported from approved data-only weekly plan 2026-07-27 to 2026-08-02. Uses scheduled date/time, no dueAt, no hierarchy creation, and direct mark/pack-check signals.",
     importBatchId: "weekly_timetable_2026_07_27_2026_08_02_data_only_v1",
+    allowTitleRefs: true,
     items,
     setMarkDueAt: false,
   });

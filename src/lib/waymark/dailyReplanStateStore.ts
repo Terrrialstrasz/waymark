@@ -1,7 +1,7 @@
 import type { AppSettingsRepository, LocalDateString } from "../../domain/waymark";
 
 export type DailyReplanDraftState = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   localDate: LocalDateString;
   trailDayId: string;
   timezone: string;
@@ -10,11 +10,25 @@ export type DailyReplanDraftState = {
   candidateRootMarkIds: string[];
 };
 
-export type DailyReplanConfirmedState = Omit<DailyReplanDraftState, "status"> & {
+export type DailyReplanConfirmedPlanEntry = {
+  rootMarkId: string;
+  baselineLeafMarkId: string;
+};
+
+export type DailyReplanConfirmedStateV1 = Omit<DailyReplanDraftState, "schemaVersion" | "status"> & {
+  schemaVersion: 1;
   status: "confirmed";
   confirmedAt: string;
 };
 
+export type DailyReplanConfirmedStateV2 = Omit<DailyReplanDraftState, "schemaVersion" | "status"> & {
+  schemaVersion: 2;
+  status: "confirmed";
+  confirmedAt: string;
+  confirmedPlanEntries: DailyReplanConfirmedPlanEntry[];
+};
+
+export type DailyReplanConfirmedState = DailyReplanConfirmedStateV1 | DailyReplanConfirmedStateV2;
 export type DailyReplanState = DailyReplanDraftState | DailyReplanConfirmedState;
 
 const DAILY_REPLAN_PREFIX = "daily_replan:";
@@ -32,8 +46,45 @@ function isLocalDate(value: unknown): value is LocalDateString {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+function isSortedUnique(values: string[]) {
+  return new Set(values).size === values.length && !values.some((id, index) => index > 0 && values[index - 1] > id);
+}
+
+function parseConfirmedPlanEntries(
+  value: unknown,
+  candidateRootMarkIds: string[],
+): DailyReplanConfirmedPlanEntry[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const roots = new Set(candidateRootMarkIds);
+  const entries: DailyReplanConfirmedPlanEntry[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.rootMarkId !== "string" ||
+      !item.rootMarkId ||
+      typeof item.baselineLeafMarkId !== "string" ||
+      !item.baselineLeafMarkId ||
+      !roots.has(item.rootMarkId)
+    ) {
+      return null;
+    }
+    entries.push({
+      rootMarkId: item.rootMarkId,
+      baselineLeafMarkId: item.baselineLeafMarkId,
+    });
+  }
+  const entryRoots = entries.map((entry) => entry.rootMarkId);
+  return isSortedUnique(entryRoots) ? entries : null;
+}
+
 function parseState(value: unknown, expectedDate: LocalDateString): DailyReplanState | null {
-  if (!isRecord(value) || value.schemaVersion !== 1 || value.localDate !== expectedDate) {
+  if (
+    !isRecord(value) ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
+    value.localDate !== expectedDate
+  ) {
     return null;
   }
   if (
@@ -49,7 +100,7 @@ function parseState(value: unknown, expectedDate: LocalDateString): DailyReplanS
   }
 
   const roots = value.candidateRootMarkIds as string[];
-  if (new Set(roots).size !== roots.length || roots.some((id, index) => index > 0 && roots[index - 1] > id)) {
+  if (!isSortedUnique(roots)) {
     return null;
   }
 
@@ -57,7 +108,17 @@ function parseState(value: unknown, expectedDate: LocalDateString): DailyReplanS
     return value as DailyReplanDraftState;
   }
   if (value.status === "confirmed" && typeof value.confirmedAt === "string" && value.confirmedAt >= value.startedAt) {
-    return value as DailyReplanConfirmedState;
+    if (value.schemaVersion === 1) {
+      return value as DailyReplanConfirmedStateV1;
+    }
+    const confirmedPlanEntries = parseConfirmedPlanEntries(value.confirmedPlanEntries, roots);
+    if (!confirmedPlanEntries) {
+      return null;
+    }
+    return {
+      ...(value as Omit<DailyReplanConfirmedStateV2, "confirmedPlanEntries">),
+      confirmedPlanEntries,
+    };
   }
   return null;
 }
@@ -83,16 +144,32 @@ export async function setDailyReplanState(
   userId: string,
   state: DailyReplanState,
 ): Promise<DailyReplanState> {
+  const candidateRootMarkIds = [...new Set(state.candidateRootMarkIds)].sort();
   const normalized: DailyReplanState = {
     ...state,
-    candidateRootMarkIds: [...new Set(state.candidateRootMarkIds)].sort(),
-  };
+    candidateRootMarkIds,
+    ...(state.status === "confirmed" && state.schemaVersion === 2
+      ? {
+          confirmedPlanEntries: state.confirmedPlanEntries
+            .filter((entry) => candidateRootMarkIds.includes(entry.rootMarkId))
+            .sort((left, right) => left.rootMarkId.localeCompare(right.rootMarkId)),
+        }
+      : {}),
+  } as DailyReplanState;
   const parsed = parseState(normalized, state.localDate);
   if (!parsed) {
     throw new Error(`Cannot persist invalid Daily Replan state for ${state.localDate}.`);
   }
   await settings.setSetting(userId, stateKey(state.localDate), normalized);
   return normalized;
+}
+
+export async function deleteDailyReplanState(
+  settings: AppSettingsRepository,
+  userId: string,
+  localDate: LocalDateString,
+): Promise<void> {
+  await settings.deleteSetting(userId, stateKey(localDate));
 }
 
 export async function getDailyReplanActivationDate(

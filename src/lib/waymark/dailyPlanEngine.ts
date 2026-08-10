@@ -2,6 +2,7 @@ import type { LocalDateString, MarkInstance, TrailDay, WaymarkRepositories } fro
 import { MarkInstanceStatus, TrailDayStatus } from "../../domain/waymark/enums";
 import {
   ensureDailyReplanActivationDate,
+  deleteDailyReplanState,
   getDailyReplanActivationDate,
   getDailyReplanState,
   setDailyReplanState,
@@ -15,6 +16,10 @@ import {
   type PlannedMarkLineage,
 } from "./plannedMarkLineage";
 import { getMarkMetadata } from "./markMetadataStore";
+import {
+  buildConfirmedPlanEntriesFromLineages,
+  projectConfirmedDailyPlan,
+} from "./confirmedDailyPlanProjection";
 
 export type EffectiveDailyPlanMembership = "provisional" | "draft" | "confirmed";
 
@@ -54,7 +59,48 @@ export class DailyPlanEngine {
     return this.repositories.transaction.runInTransaction(async (repos) => {
       const existing = await getDailyReplanState(repos.appSettings, userId, localDate);
       if (existing) {
-        return this.resolveWithRepositories(repos, userId, localDate);
+        if (
+          existing.status === "confirmed" &&
+          existing.candidateRootMarkIds.length === 0 &&
+          (existing.schemaVersion !== 2 || existing.confirmedPlanEntries.length === 0)
+        ) {
+          const candidateRootMarkIds = await collectCandidateRootMarkIds(repos, userId, localDate);
+          if (candidateRootMarkIds.length > 0) {
+            await setDailyReplanState(repos.appSettings, userId, {
+              schemaVersion: 2,
+              localDate,
+              trailDayId: existing.trailDayId,
+              timezone: existing.timezone,
+              status: "draft",
+              startedAt,
+              candidateRootMarkIds,
+            });
+          }
+        }
+        try {
+          return await this.resolveWithRepositories(repos, userId, localDate);
+        } catch (error) {
+          if (!isMissingDailyPlanRootError(error)) {
+            throw error;
+          }
+          await deleteDailyReplanState(repos.appSettings, userId, localDate);
+          const trailDay = await repos.trailDays.getOrCreateTrailDay(userId, localDate);
+          assertReplannableTrailDay(trailDay);
+          const candidateRootMarkIds = await collectCandidateRootMarkIds(repos, userId, localDate);
+          await setDailyReplanState(repos.appSettings, userId, {
+            schemaVersion: 2,
+            localDate,
+            trailDayId: trailDay.id,
+            timezone,
+            status: candidateRootMarkIds.length === 0 ? "confirmed" : "draft",
+            startedAt,
+            ...(candidateRootMarkIds.length === 0 ? { confirmedAt: startedAt, confirmedPlanEntries: [] } : {}),
+            candidateRootMarkIds,
+          } as DailyReplanState);
+          const plan = await this.resolveWithRepositories(repos, userId, localDate);
+          await this.recomputeExecutionCounters(repos, plan);
+          return plan;
+        }
       }
 
       const trailDay = await repos.trailDays.getOrCreateTrailDay(userId, localDate);
@@ -62,13 +108,13 @@ export class DailyPlanEngine {
       const candidateRootMarkIds = await collectCandidateRootMarkIds(repos, userId, localDate);
       await ensureDailyReplanActivationDate(repos.appSettings, userId, localDate);
       await setDailyReplanState(repos.appSettings, userId, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         localDate,
         trailDayId: trailDay.id,
         timezone,
         status: candidateRootMarkIds.length === 0 ? "confirmed" : "draft",
         startedAt,
-        ...(candidateRootMarkIds.length === 0 ? { confirmedAt: startedAt } : {}),
+        ...(candidateRootMarkIds.length === 0 ? { confirmedAt: startedAt, confirmedPlanEntries: [] } : {}),
         candidateRootMarkIds,
       } as DailyReplanState);
       const plan = await this.resolveWithRepositories(repos, userId, localDate);
@@ -91,11 +137,14 @@ export class DailyPlanEngine {
         throw new DailyPlanIntegrityError(`Daily Replan ${localDate} references missing TrailDay ${state.trailDayId}.`);
       }
       assertReplannableTrailDay(trailDay);
-      await this.resolveWithRepositories(repos, userId, localDate);
+      const draftPlan = await this.resolveWithRepositories(repos, userId, localDate);
+      const confirmedPlanEntries = buildConfirmedPlanEntriesFromLineages(draftPlan.lineages, trailDay.id);
       await setDailyReplanState(repos.appSettings, userId, {
         ...state,
+        schemaVersion: 2,
         status: "confirmed",
         confirmedAt,
+        confirmedPlanEntries,
       });
       const plan = await this.resolveWithRepositories(repos, userId, localDate);
       await this.recomputeExecutionCounters(repos, plan);
@@ -205,18 +254,23 @@ export class DailyPlanEngine {
         lineage.leaf.trailDayId === trailDay.id && lineage.leaf.status === MarkInstanceStatus.Skipped,
     ).length;
     const memoryCount = (await repos.memories.listMemoriesByTrailDay(trailDay.id)).length;
+    const projection = plan.state?.status === "confirmed" ? projectConfirmedDailyPlan(plan) : null;
+    const nextPlannedMarkCount = projection?.confirmedPlannedCount ?? plan.effectiveMarks.length;
+    const nextCompletedMarkCount = projection?.completedCount ?? completedMarkCount;
+    const nextSkippedMarkCount = projection?.skippedAfterConfirmCount ?? skippedMarkCount;
+
     if (
-      trailDay.plannedMarkCount === plan.effectiveMarks.length &&
-      trailDay.completedMarkCount === completedMarkCount &&
-      trailDay.skippedMarkCount === skippedMarkCount &&
+      trailDay.plannedMarkCount === nextPlannedMarkCount &&
+      trailDay.completedMarkCount === nextCompletedMarkCount &&
+      trailDay.skippedMarkCount === nextSkippedMarkCount &&
       trailDay.memoryCount === memoryCount
     ) {
       return trailDay;
     }
     return repos.trailDays.updateTrailDay(trailDay.id, {
-      plannedMarkCount: plan.effectiveMarks.length,
-      completedMarkCount,
-      skippedMarkCount,
+      plannedMarkCount: nextPlannedMarkCount,
+      completedMarkCount: nextCompletedMarkCount,
+      skippedMarkCount: nextSkippedMarkCount,
       memoryCount,
     });
   }
@@ -224,4 +278,11 @@ export class DailyPlanEngine {
 
 export function createDailyPlanEngine(repositories: WaymarkRepositories) {
   return new DailyPlanEngine(repositories);
+}
+
+function isMissingDailyPlanRootError(error: unknown) {
+  return (
+    error instanceof DailyPlanIntegrityError &&
+    /^Daily plan root .+ does not exist\.$/u.test(error.message)
+  );
 }

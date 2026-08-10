@@ -1,23 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, Share } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { getWaymarkDatabaseAsync } from "../db";
+import { createSQLiteRepositoryProvider } from "../db/adapters/SQLiteRepositories";
 import {
   WaymarkTursoRemoteAdapter,
+  WaymarkTursoFullDatabaseRemoteAdapter,
+  WAYMARK_PROGRESS_PROJECTION_ENTITY_TYPES,
   applyTursoInboundChangesToLocalSqlite,
   createWaymarkTursoClient,
+  createWaymarkTursoPipelineReadClient,
   enqueueAllWaymarkTablesForTursoUpload,
   listSyncOutboxRowsForDevice,
-  pullTypedPlanningWeekPlansFromTurso,
+  pullAllMarkInstancesFromTurso,
+  pullAllTrailDaysFromTurso,
   uploadHierarchyProjectionToTurso,
-  uploadTypedWeekPlanItemsToTurso,
-  uploadTypedWeekPlansToTurso,
   uploadWaymarkOutboxToTurso,
+  pushWaymarkFullDatabaseAtEod,
+  runWaymarkTursoPull,
   type SyncOutboxDrainTrigger,
   type WaymarkTursoUploadResult,
 } from "../lib/waymark";
+import { WAYMARK_MAP_CONFIG } from "../waymark-map";
 import type { Locale } from "../types/ui";
 
 type TursoDevSyncStatus = "idle" | "uploading" | "pulling" | "clearing" | "success" | "error";
@@ -35,6 +41,8 @@ type AppDbMetadataRow = {
 
 type SyncStateRow = {
   last_cloud_revision: number | null;
+  protection_status: string;
+  full_db_schema_version: number;
 };
 
 type UploadAllTablesResult = {
@@ -44,14 +52,6 @@ type UploadAllTablesResult = {
   uploaded: number;
   failed: number;
   batches: number;
-};
-
-type UploadTypedWeekPlansResult = {
-  scanned: number;
-  uploaded: number;
-  duplicates: number;
-  failed: number;
-  stoppedAfterTransientFailure: boolean;
 };
 
 type UploadHierarchyProjectionResult = {
@@ -68,6 +68,47 @@ type PullTypedWeekPlansResult = {
   fetched: number;
   applied: number;
   skipped: number;
+  byEntityType: {
+    week_plan: number;
+    week_plan_item: number;
+    path: number;
+    expedition: number;
+    milestone: number;
+  };
+  retiredLocalOnly: {
+    path: number;
+    expedition: number;
+    milestone: number;
+  };
+  materializedWeekPlanItems: {
+    created: number;
+    updated: number;
+    adopted: number;
+    protected: number;
+    conflict: number;
+    skipped: number;
+  };
+};
+
+type PullHierarchyProjectionResult = PullTypedWeekPlansResult;
+
+type PullAllMarkInstancesResult = {
+  fetched: number;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  conflicts: number;
+  affectedTrailDays: number;
+  conflictSamples: Array<{ markId: string; message: string }>;
+};
+
+type PullAllTrailDaysResult = {
+  fetched: number;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  conflicts: number;
+  conflictSamples: Array<{ trailDayId: string; message: string }>;
 };
 
 type TursoDebugLogEntry = {
@@ -79,6 +120,8 @@ type TursoDebugLogEntry = {
 
 const MAX_TURSO_DEBUG_LOG_ENTRIES = 1000;
 const TURSO_LINK_STORAGE_KEY = "waymark.turso.link.v1";
+const TURSO_PULL_MAX_ATTEMPTS = 3;
+const TURSO_PULL_RETRY_DELAY_MS = 800;
 
 export function useWaymarkTursoDevSync(locale: Locale) {
   const envConfig = useMemo(() => getTursoRuntimeConfig(), []);
@@ -86,7 +129,13 @@ export function useWaymarkTursoDevSync(locale: Locale) {
   const config = storedConfig ?? envConfig;
   const [status, setStatus] = useState<TursoDevSyncStatus>("idle");
   const [lastMessage, setLastMessage] = useState<string | null>(null);
+  const lastMessageRef = useRef<string | null>(null);
   const [debugLog, setDebugLog] = useState<TursoDebugLogEntry[]>([]);
+
+  const updateLastMessage = useCallback((message: string | null) => {
+    lastMessageRef.current = message;
+    setLastMessage(message);
+  }, []);
 
   const appendDebugLog = useCallback((event: string, payload?: Record<string, unknown>) => {
     const entry = {
@@ -107,7 +156,7 @@ export function useWaymarkTursoDevSync(locale: Locale) {
         const linked = await loadStoredTursoLink();
         if (!cancelled && linked) {
           setStoredConfig(linked);
-          setLastMessage(locale === "vi" ? "Turso da duoc link tu SecureStore." : "Turso is linked from SecureStore.");
+          updateLastMessage(locale === "vi" ? "Turso da duoc link tu SecureStore." : "Turso is linked from SecureStore.");
           appendDebugLog("turso_link_restore_success", {
             url: maskTursoUrl(linked.url),
             hasAuthToken: Boolean(linked.authToken),
@@ -116,7 +165,7 @@ export function useWaymarkTursoDevSync(locale: Locale) {
       } catch (error) {
         if (!cancelled) {
           setStatus("error");
-          setLastMessage(formatError(error));
+          updateLastMessage(formatError(error));
           appendDebugLog("turso_link_restore_error", { message: formatError(error) });
         }
       }
@@ -125,13 +174,13 @@ export function useWaymarkTursoDevSync(locale: Locale) {
     return () => {
       cancelled = true;
     };
-  }, [appendDebugLog, locale]);
+  }, [appendDebugLog, locale, updateLastMessage]);
 
   const linkTurso = useCallback(
     async (input: TursoRuntimeConfig) => {
       const nextConfig = normalizeTursoConfig(input);
       setStatus("uploading");
-      setLastMessage(locale === "vi" ? "Dang kiem tra ket noi Turso." : "Checking the Turso connection.");
+      updateLastMessage(locale === "vi" ? "Dang kiem tra ket noi Turso." : "Checking the Turso connection.");
       appendDebugLog("turso_link_start", {
         url: maskTursoUrl(nextConfig.url),
         hasAuthToken: Boolean(nextConfig.authToken),
@@ -142,39 +191,49 @@ export function useWaymarkTursoDevSync(locale: Locale) {
         await SecureStore.setItemAsync(TURSO_LINK_STORAGE_KEY, JSON.stringify(nextConfig));
         setStoredConfig(nextConfig);
         setStatus("success");
-        setLastMessage(locale === "vi" ? "Da link Waymark voi Turso." : "Waymark is linked with Turso.");
+        updateLastMessage(locale === "vi" ? "Da link Waymark voi Turso." : "Waymark is linked with Turso.");
         appendDebugLog("turso_link_success", { url: maskTursoUrl(nextConfig.url) });
         return true;
       } catch (error) {
         const message = formatError(error);
         setStatus("error");
-        setLastMessage(message);
+        updateLastMessage(message);
         appendDebugLog("turso_link_error", { message });
         return false;
       }
     },
-    [appendDebugLog, locale],
+    [appendDebugLog, locale, updateLastMessage],
   );
 
   const unlinkTurso = useCallback(async () => {
     await SecureStore.deleteItemAsync(TURSO_LINK_STORAGE_KEY);
     setStoredConfig(null);
     setStatus("idle");
-    setLastMessage(locale === "vi" ? "Da bo link Turso tren thiet bi nay." : "Turso was unlinked on this device.");
+    updateLastMessage(locale === "vi" ? "Da bo link Turso tren thiet bi nay." : "Turso was unlinked on this device.");
     appendDebugLog("turso_unlink_success");
-  }, [appendDebugLog, locale]);
+  }, [appendDebugLog, locale, updateLastMessage]);
 
   const runUpload = useCallback(
     async (trigger: SyncOutboxDrainTrigger) => {
+      if (trigger !== "eod") {
+        setStatus("error");
+        updateLastMessage(
+          locale === "vi"
+            ? "Turso Full-DB chỉ nhận mutation từ Waymark trong EOD sync."
+            : "Turso Full-DB accepts Waymark mutations only during EOD sync.",
+        );
+        appendDebugLog("turso_full_db_upload_rejected_trigger", { trigger });
+        return null;
+      }
       if (!config) {
         setStatus("error");
-        setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+        updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
         appendDebugLog("turso_upload_blocked_missing_config", { trigger });
         return null;
       }
 
       setStatus("uploading");
-      setLastMessage(locale === "vi" ? "Dang day outbox len Turso." : "Uploading outbox to Turso.");
+      updateLastMessage(locale === "vi" ? "Dang day mutation EOD vao Turso Full-DB." : "Pushing EOD mutations into Turso Full-DB.");
       appendDebugLog("turso_upload_start", {
         trigger,
         url: maskTursoUrl(config.url),
@@ -182,105 +241,130 @@ export function useWaymarkTursoDevSync(locale: Locale) {
       try {
         const db = await getWaymarkDatabaseAsync();
         const metadata = await readCurrentMetadata(db);
-        const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-        await adapter.ensureSchema();
-        const result = await uploadWaymarkOutboxToTurso({
+        const adapter = new WaymarkTursoFullDatabaseRemoteAdapter(createWaymarkTursoClient(config));
+        const schemaState = await adapter.getSchemaState();
+        if (!schemaState || schemaState.migrationMode !== "active") {
+          throw new Error("Turso Full-DB migration is not active; legacy projection upload is disabled.");
+        }
+        const result = await pushWaymarkFullDatabaseAtEod({
           executor: db,
           adapter,
           vaultId: metadata.vault_id,
-          trigger,
-          limit: 100,
-          maxPushAttempts: 2,
-          retryDelayMs: 750,
-          stopOnTransientFailure: true,
+          limit: 500,
         });
-        appendDebugLog("turso_upload_result", describeUploadResult(result));
-        await markCloudSyncAttempt(db, metadata, result.failed.length === 0);
-        setStatus(result.failed.length > 0 ? "error" : "success");
-        setLastMessage(
+        appendDebugLog("turso_full_db_eod_upload_result", {
+          attempted: result.attempted,
+          uploaded: result.uploaded,
+          duplicates: result.duplicates,
+          rejected: result.rejected,
+          failed: result.failed,
+        });
+        const failed = result.failed.length;
+        await markCloudSyncAttempt(db, metadata, failed === 0);
+        setStatus(failed > 0 ? "error" : "success");
+        updateLastMessage(
           locale === "vi"
-            ? `${trigger}: da day ${result.uploaded.length}/${result.attempted}, loi ${result.failed.length}.`
-            : `${trigger}: uploaded ${result.uploaded.length}/${result.attempted}, failed ${result.failed.length}.`,
+            ? `EOD Full-DB: ${result.uploaded}/${result.attempted} mutation, ${result.duplicates} trung lap, ${result.rejected} bi ownership tu choi, ${failed} loi.`
+            : `EOD Full-DB: ${result.uploaded}/${result.attempted} mutations, ${result.duplicates} duplicates, ${result.rejected} rejected by ownership, ${failed} failed.`,
         );
         return result;
       } catch (error) {
         const message = formatError(error);
         setStatus("error");
-        setLastMessage(message);
+        updateLastMessage(message);
         appendDebugLog("turso_upload_error", { message, trigger });
         return null;
       }
     },
-    [appendDebugLog, config, locale],
+    [appendDebugLog, config, locale, updateLastMessage],
   );
 
   const pullRemoteEdits = useCallback(async () => {
     if (!config) {
       setStatus("error");
-      setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
       appendDebugLog("turso_pull_blocked_missing_config");
       return null;
     }
 
     setStatus("pulling");
-    setLastMessage(locale === "vi" ? "Dang keo remote edits tu Turso." : "Pulling remote edits from Turso.");
-    appendDebugLog("turso_pull_start", { url: maskTursoUrl(config.url) });
+    updateLastMessage(locale === "vi" ? "Dang dong bo Turso Full-DB vao cache local." : "Syncing Turso Full-DB into the local cache.");
+    appendDebugLog("turso_pull_start", { url: maskTursoUrl(config.url), transport: "pipeline_json" });
     try {
       const db = await getWaymarkDatabaseAsync();
       const metadata = await readCurrentMetadata(db);
-      const syncState = await db.getFirstAsync<SyncStateRow>(
-        "SELECT last_cloud_revision FROM sync_state WHERE vault_id = ? AND device_id = ? LIMIT 1;",
-        metadata.vault_id,
-        metadata.device_id,
+      const coordinated = await retryTursoPull(
+        async () => {
+          const syncState = await db.getFirstAsync<SyncStateRow>(
+            "SELECT last_cloud_revision, protection_status, full_db_schema_version FROM sync_state WHERE vault_id = ? AND device_id = ? LIMIT 1;",
+            metadata.vault_id,
+            metadata.device_id,
+          );
+          const client = createWaymarkTursoPipelineReadClient(config);
+          const fullDbAdapter = new WaymarkTursoFullDatabaseRemoteAdapter(client);
+          try {
+            const coordinated = await runWaymarkTursoPull({
+              mode: "full",
+              fullDbMode: syncState?.full_db_schema_version === 1 ? "incremental" : "snapshot",
+              database: db as any,
+              fullDbAdapter,
+              planningAdapter: new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config)),
+              repositories: createSQLiteRepositoryProvider(),
+              mapConfig: WAYMARK_MAP_CONFIG,
+              userId: await readCurrentUserId(db),
+              vaultId: metadata.vault_id,
+              deviceId: metadata.device_id,
+            });
+            appendDebugLog("turso_pull_coordinator_result", coordinated as unknown as Record<string, unknown>);
+            if (!coordinated.fullDatabase) {
+              throw new Error("Full-DB coordinator completed without a Full-DB result.");
+            }
+            return coordinated;
+          } finally {
+            client.close();
+          }
+        },
+        {
+          eventPrefix: "turso_pull",
+          appendDebugLog,
+        },
       );
-      const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-      await adapter.ensureSchema();
-      const changes = await adapter.listChangesSince({
-        vaultId: metadata.vault_id,
-        afterRemoteRevision: syncState?.last_cloud_revision ?? 0,
-        entityTypes: ["week_plan", "week_plan_item", "signal"],
-        limit: 100,
-      });
-      const applyResults = await applyTursoInboundChangesToLocalSqlite(db as any, changes);
-      const maxRevision = changes.reduce((max, record) => Math.max(max, record.remoteRevision), syncState?.last_cloud_revision ?? 0);
-      await db.runAsync(
-        `UPDATE sync_state
-         SET last_cloud_revision = ?, last_successful_sync_at = ?, protection_status = 'protected'
-         WHERE vault_id = ? AND device_id = ?;`,
-        maxRevision,
-        Date.now(),
-        metadata.vault_id,
-        metadata.device_id,
-      );
+      const pull = coordinated.fullDatabase!;
       await markCloudSyncAttempt(db, metadata, true);
-      const applied = applyResults.filter((result) => result.status === "applied").length;
-      const conflicts = applyResults.filter((result) => result.status === "conflict").length;
-      setStatus(conflicts > 0 ? "error" : "success");
-      setLastMessage(
+      setStatus("success");
+      appendDebugLog("turso_full_db_pull_result", pull);
+      const materialized =
+        coordinated.planning.materializedWeekPlanItems.created +
+        coordinated.planning.materializedWeekPlanItems.updated +
+        coordinated.planning.materializedWeekPlanItems.adopted +
+        coordinated.localRepair.materializedWeekPlanItems.created +
+        coordinated.localRepair.materializedWeekPlanItems.updated +
+        coordinated.localRepair.materializedWeekPlanItems.adopted;
+      updateLastMessage(
         locale === "vi"
-          ? `Da keo ${changes.length} remote changes: applied ${applied}, conflict ${conflicts}.`
-          : `Pulled ${changes.length} remote changes: applied ${applied}, conflicts ${conflicts}.`,
+          ? `Full-DB ${pull.mode}: applied ${pull.applied}/${pull.fetched}, revision ${pull.throughGlobalRevision}; planning cursor ${coordinated.planning.throughChangeSequence}, materialized ${materialized} Marks; hierarchy reconciled.`
+          : `Full-DB ${pull.mode}: applied ${pull.applied}/${pull.fetched}, revision ${pull.throughGlobalRevision}; planning cursor ${coordinated.planning.throughChangeSequence}, materialized ${materialized} Marks; hierarchy reconciled.`,
       );
-      return { changes, applyResults };
+      return coordinated;
     } catch (error) {
       const message = formatError(error);
       setStatus("error");
-      setLastMessage(message);
+      updateLastMessage(message);
       appendDebugLog("turso_pull_error", { message });
       return null;
     }
-  }, [appendDebugLog, config, locale]);
+  }, [appendDebugLog, config, locale, updateLastMessage]);
 
   const uploadAllTables = useCallback(async (): Promise<UploadAllTablesResult | null> => {
     if (!config) {
       setStatus("error");
-      setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
       appendDebugLog("turso_upload_all_tables_blocked_missing_config");
       return null;
     }
 
     setStatus("uploading");
-    setLastMessage(locale === "vi" ? "Dang snapshot toan bo bang Waymark len outbox." : "Snapshotting all Waymark tables to the outbox.");
+    updateLastMessage(locale === "vi" ? "Dang snapshot toan bo bang Waymark len outbox." : "Snapshotting all Waymark tables to the outbox.");
     appendDebugLog("turso_upload_all_tables_start", {
       url: maskTursoUrl(config.url),
     });
@@ -288,7 +372,6 @@ export function useWaymarkTursoDevSync(locale: Locale) {
       const db = await getWaymarkDatabaseAsync();
       const metadata = await readCurrentMetadata(db);
       const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-      await adapter.ensureSchema();
       const bootstrap = await enqueueAllWaymarkTablesForTursoUpload({
         executor: db,
         vaultId: metadata.vault_id,
@@ -347,7 +430,7 @@ export function useWaymarkTursoDevSync(locale: Locale) {
       };
       appendDebugLog("turso_upload_all_tables_done", result);
       setStatus(failed > 0 ? "error" : "success");
-      setLastMessage(
+      updateLastMessage(
         locale === "vi"
           ? `All tables: scan ${result.scanned}, outbox moi ${result.enqueued}, uploaded ${result.uploaded}/${result.attempted}, loi ${result.failed}.`
           : `All tables: scanned ${result.scanned}, new outbox ${result.enqueued}, uploaded ${result.uploaded}/${result.attempted}, failed ${result.failed}.`,
@@ -356,145 +439,37 @@ export function useWaymarkTursoDevSync(locale: Locale) {
     } catch (error) {
       const message = formatError(error);
       setStatus("error");
-      setLastMessage(message);
+      updateLastMessage(message);
       appendDebugLog("turso_upload_all_tables_error", { message });
       return null;
     }
-  }, [appendDebugLog, config, locale]);
-
-  const uploadTypedWeekPlans = useCallback(async (): Promise<UploadTypedWeekPlansResult | null> => {
-    if (!config) {
-      setStatus("error");
-      setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
-      appendDebugLog("turso_typed_week_plans_upload_blocked_missing_config");
-      return null;
-    }
-
-    setStatus("uploading");
-    setLastMessage(locale === "vi" ? "Dang upload typed week_plans len Turso." : "Uploading typed week_plans to Turso.");
-    appendDebugLog("turso_typed_week_plans_upload_start", { url: maskTursoUrl(config.url) });
-    try {
-      const db = await getWaymarkDatabaseAsync();
-      const metadata = await readCurrentMetadata(db);
-      const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-      await adapter.ensureSchema();
-      const upload = await uploadTypedWeekPlansToTurso({
-        executor: db,
-        adapter,
-        vaultId: metadata.vault_id,
-        deviceId: metadata.device_id,
-        maxPushAttempts: 2,
-        retryDelayMs: 750,
-        stopOnTransientFailure: true,
-      });
-      const result = {
-        scanned: upload.scanned,
-        uploaded: upload.uploaded,
-        duplicates: upload.duplicates,
-        failed: upload.failed.length,
-        stoppedAfterTransientFailure: upload.stoppedAfterTransientFailure,
-      };
-      appendDebugLog("turso_typed_week_plans_upload_result", {
-        ...result,
-        failedRows: upload.failed,
-        mutations: upload.mutations.slice(0, 20),
-      });
-      await markCloudSyncAttempt(db, metadata, upload.failed.length === 0);
-      setStatus(upload.failed.length > 0 ? "error" : "success");
-      setLastMessage(
-        locale === "vi"
-          ? `Typed week_plans: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicate ${result.duplicates}, loi ${result.failed}${result.stoppedAfterTransientFailure ? ", da dung som do loi ket noi" : ""}.`
-          : `Typed week_plans: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicates ${result.duplicates}, failed ${result.failed}${result.stoppedAfterTransientFailure ? ", stopped after a transient connection error" : ""}.`,
-      );
-      return result;
-    } catch (error) {
-      const message = formatError(error);
-      setStatus("error");
-      setLastMessage(message);
-      appendDebugLog("turso_typed_week_plans_upload_error", { message });
-      return null;
-    }
-  }, [appendDebugLog, config, locale]);
-
-  const uploadTypedWeekPlanItems = useCallback(async (): Promise<UploadTypedWeekPlansResult | null> => {
-    if (!config) {
-      setStatus("error");
-      setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
-      appendDebugLog("turso_typed_week_plan_items_upload_blocked_missing_config");
-      return null;
-    }
-
-    setStatus("uploading");
-    setLastMessage(locale === "vi" ? "Dang upload typed week_plan_items len Turso." : "Uploading typed week_plan_items to Turso.");
-    appendDebugLog("turso_typed_week_plan_items_upload_start", { url: maskTursoUrl(config.url) });
-    try {
-      const db = await getWaymarkDatabaseAsync();
-      const metadata = await readCurrentMetadata(db);
-      const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-      await adapter.ensureSchema();
-      const upload = await uploadTypedWeekPlanItemsToTurso({
-        executor: db,
-        adapter,
-        vaultId: metadata.vault_id,
-        deviceId: metadata.device_id,
-        maxPushAttempts: 2,
-        retryDelayMs: 750,
-        stopOnTransientFailure: true,
-      });
-      const result = {
-        scanned: upload.scanned,
-        uploaded: upload.uploaded,
-        duplicates: upload.duplicates,
-        failed: upload.failed.length,
-        stoppedAfterTransientFailure: upload.stoppedAfterTransientFailure,
-      };
-      appendDebugLog("turso_typed_week_plan_items_upload_result", {
-        ...result,
-        failedRows: upload.failed,
-        mutations: upload.mutations.slice(0, 20),
-      });
-      await markCloudSyncAttempt(db, metadata, upload.failed.length === 0);
-      setStatus(upload.failed.length > 0 ? "error" : "success");
-      setLastMessage(
-        locale === "vi"
-          ? `Typed week_plan_items: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicate ${result.duplicates}, loi ${result.failed}${result.stoppedAfterTransientFailure ? ", da dung som do loi ket noi" : ""}.`
-          : `Typed week_plan_items: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicates ${result.duplicates}, failed ${result.failed}${result.stoppedAfterTransientFailure ? ", stopped after a transient connection error" : ""}.`,
-      );
-      return result;
-    } catch (error) {
-      const message = formatError(error);
-      setStatus("error");
-      setLastMessage(message);
-      appendDebugLog("turso_typed_week_plan_items_upload_error", { message });
-      return null;
-    }
-  }, [appendDebugLog, config, locale]);
+  }, [appendDebugLog, config, locale, updateLastMessage]);
 
   const uploadHierarchyProjection = useCallback(async (): Promise<UploadHierarchyProjectionResult | null> => {
     if (!config) {
       setStatus("error");
-      setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
       appendDebugLog("turso_hierarchy_projection_upload_blocked_missing_config");
       return null;
     }
 
     setStatus("uploading");
-    setLastMessage(
+    updateLastMessage(
       locale === "vi"
-        ? "Dang upload typed paths, expeditions va mark_instances len Turso."
-        : "Uploading typed paths, expeditions, and mark_instances to Turso.",
+        ? "Dang upload typed expedition, milestone, trail days va marks len Turso."
+        : "Uploading typed expeditions, milestones, trail days, and marks to Turso.",
     );
     appendDebugLog("turso_hierarchy_projection_upload_start", { url: maskTursoUrl(config.url) });
     try {
       const db = await getWaymarkDatabaseAsync();
       const metadata = await readCurrentMetadata(db);
       const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-      await adapter.ensureSchema();
       const upload = await uploadHierarchyProjectionToTurso({
         executor: db,
         adapter,
         vaultId: metadata.vault_id,
         deviceId: metadata.device_id,
+        entityTypes: WAYMARK_PROGRESS_PROJECTION_ENTITY_TYPES,
         maxPushAttempts: 2,
         retryDelayMs: 750,
         stopOnTransientFailure: true,
@@ -514,71 +489,224 @@ export function useWaymarkTursoDevSync(locale: Locale) {
       });
       await markCloudSyncAttempt(db, metadata, upload.failed.length === 0);
       setStatus(upload.failed.length > 0 ? "error" : "success");
-      setLastMessage(
+      updateLastMessage(
         locale === "vi"
-          ? `Hierarchy typed: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicate ${result.duplicates}, loi ${result.failed}${result.stoppedAfterTransientFailure ? ", da dung som do loi ket noi" : ""}.`
-          : `Hierarchy typed: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicates ${result.duplicates}, failed ${result.failed}${result.stoppedAfterTransientFailure ? ", stopped after a transient connection error" : ""}.`,
+          ? `Progress map typed: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicate ${result.duplicates}, expeditions ${upload.byEntityType.expedition.scanned}, milestones ${upload.byEntityType.milestone.scanned}, trail days ${upload.byEntityType.trail_day.scanned}, marks ${upload.byEntityType.mark_instance.scanned}, loi ${result.failed}${result.stoppedAfterTransientFailure ? ", da dung som do loi ket noi" : ""}.`
+          : `Progress map typed: scanned ${result.scanned}, uploaded ${result.uploaded}, duplicates ${result.duplicates}, expeditions ${upload.byEntityType.expedition.scanned}, milestones ${upload.byEntityType.milestone.scanned}, trail days ${upload.byEntityType.trail_day.scanned}, marks ${upload.byEntityType.mark_instance.scanned}, failed ${result.failed}${result.stoppedAfterTransientFailure ? ", stopped after a transient connection error" : ""}.`,
       );
       return result;
     } catch (error) {
       const message = formatError(error);
       setStatus("error");
-      setLastMessage(message);
+      updateLastMessage(message);
       appendDebugLog("turso_hierarchy_projection_upload_error", { message });
       return null;
     }
-  }, [appendDebugLog, config, locale]);
+  }, [appendDebugLog, config, locale, updateLastMessage]);
 
   const pullTypedWeekPlans = useCallback(async (): Promise<PullTypedWeekPlansResult | null> => {
     if (!config) {
       setStatus("error");
-      setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
       appendDebugLog("turso_typed_week_plans_pull_blocked_missing_config");
       return null;
     }
 
     setStatus("pulling");
-    setLastMessage(locale === "vi" ? "Dang pull typed planning tu Turso." : "Pulling typed planning from Turso.");
+    updateLastMessage(locale === "vi" ? "Dang pull typed planning tu Turso." : "Pulling typed planning from Turso.");
     appendDebugLog("turso_typed_week_plans_pull_start", { url: maskTursoUrl(config.url) });
     try {
       const db = await getWaymarkDatabaseAsync();
       const metadata = await readCurrentMetadata(db);
       const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-      await adapter.ensureSchema();
-      const result = await pullTypedPlanningWeekPlansFromTurso({
-        executor: db as any,
-        adapter,
-        vaultId: metadata.vault_id,
-        deviceId: metadata.device_id,
-      });
+      const coordinated = await retryTursoPull(
+        () =>
+          runWaymarkTursoPull({
+            mode: "planning",
+            database: db as any,
+            planningAdapter: adapter,
+            vaultId: metadata.vault_id,
+            deviceId: metadata.device_id,
+          }),
+        {
+          eventPrefix: "turso_typed_week_plans_pull",
+          appendDebugLog,
+        },
+      );
+      const result = coordinated.planning;
+      appendDebugLog("turso_typed_week_plans_coordinator_result", coordinated as unknown as Record<string, unknown>);
       appendDebugLog("turso_typed_week_plans_pull_result", result);
       await markCloudSyncAttempt(db, metadata, true);
       setStatus("success");
-      setLastMessage(
+      const retiredHierarchyCount =
+        result.retiredLocalOnly.path + result.retiredLocalOnly.expedition + result.retiredLocalOnly.milestone;
+      updateLastMessage(
         locale === "vi"
-          ? `Typed planning pull: fetched ${result.fetched}, applied ${result.applied}, cursor ${result.throughChangeSequence}.`
-          : `Typed planning pull: fetched ${result.fetched}, applied ${result.applied}, cursor ${result.throughChangeSequence}.`,
+          ? `Typed planning pull: fetched ${result.fetched}, applied ${result.applied}, materialized ${result.materializedWeekPlanItems.created + result.materializedWeekPlanItems.updated + result.materializedWeekPlanItems.adopted}, protected ${result.materializedWeekPlanItems.protected}, retired local-only ${retiredHierarchyCount}, cursor ${result.throughChangeSequence}.`
+          : `Typed planning pull: fetched ${result.fetched}, applied ${result.applied}, materialized ${result.materializedWeekPlanItems.created + result.materializedWeekPlanItems.updated + result.materializedWeekPlanItems.adopted}, protected ${result.materializedWeekPlanItems.protected}, retired local-only ${retiredHierarchyCount}, cursor ${result.throughChangeSequence}.`,
       );
       return result;
     } catch (error) {
       const message = formatError(error);
       setStatus("error");
-      setLastMessage(message);
+      updateLastMessage(message);
       appendDebugLog("turso_typed_week_plans_pull_error", { message });
       return null;
     }
-  }, [appendDebugLog, config, locale]);
+  }, [appendDebugLog, config, locale, updateLastMessage]);
+
+  const pullHierarchyProjection = useCallback(async (): Promise<PullHierarchyProjectionResult | null> => {
+    if (!config) {
+      setStatus("error");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      appendDebugLog("turso_hierarchy_projection_pull_blocked_missing_config");
+      return null;
+    }
+
+    setStatus("pulling");
+    updateLastMessage(
+      locale === "vi"
+        ? "Dang pull Paths/Expeditions/Milestones tu Turso."
+        : "Pulling Paths/Expeditions/Milestones from Turso.",
+    );
+    appendDebugLog("turso_hierarchy_projection_pull_start", { url: maskTursoUrl(config.url) });
+    try {
+      const db = await getWaymarkDatabaseAsync();
+      const metadata = await readCurrentMetadata(db);
+      appendDebugLog("turso_hierarchy_projection_pull_metadata", {
+        dbInstanceId: metadata.db_instance_id,
+        vaultId: metadata.vault_id,
+        deviceId: metadata.device_id,
+      });
+      const userId = await readCurrentUserId(db);
+      const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
+      const coordinated = await retryTursoPull(
+        () =>
+          runWaymarkTursoPull({
+            mode: "hierarchy",
+            database: db as any,
+            planningAdapter: adapter,
+            repositories: createSQLiteRepositoryProvider(),
+            mapConfig: WAYMARK_MAP_CONFIG,
+            userId,
+            vaultId: metadata.vault_id,
+            deviceId: metadata.device_id,
+          }),
+        {
+          eventPrefix: "turso_hierarchy_projection_pull",
+          appendDebugLog,
+        },
+      );
+      const result = coordinated.planning;
+      appendDebugLog("turso_hierarchy_projection_coordinator_result", coordinated as unknown as Record<string, unknown>);
+      appendDebugLog("turso_hierarchy_projection_pull_result", {
+        ...result,
+        vaultId: metadata.vault_id,
+        deviceId: metadata.device_id,
+      });
+      await markCloudSyncAttempt(db, metadata, true);
+      setStatus("success");
+      updateLastMessage(
+        locale === "vi"
+          ? `Hierarchy pull: paths ${result.byEntityType.path}, expeditions ${result.byEntityType.expedition}, milestones ${result.byEntityType.milestone}; retired local-only paths ${result.retiredLocalOnly.path}, expeditions ${result.retiredLocalOnly.expedition}, milestones ${result.retiredLocalOnly.milestone}; cursor ${result.throughChangeSequence}.`
+          : `Hierarchy pull: paths ${result.byEntityType.path}, expeditions ${result.byEntityType.expedition}, milestones ${result.byEntityType.milestone}; retired local-only paths ${result.retiredLocalOnly.path}, expeditions ${result.retiredLocalOnly.expedition}, milestones ${result.retiredLocalOnly.milestone}; cursor ${result.throughChangeSequence}.`,
+      );
+      return result;
+    } catch (error) {
+      const message = formatError(error);
+      setStatus("error");
+      updateLastMessage(message);
+      appendDebugLog("turso_hierarchy_projection_pull_error", { message });
+      return null;
+    }
+  }, [appendDebugLog, config, locale, updateLastMessage]);
+
+  const pullAllTrailDays = useCallback(async (): Promise<PullAllTrailDaysResult | null> => {
+    if (!config) {
+      setStatus("error");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      appendDebugLog("turso_trail_days_pull_blocked_missing_config");
+      return null;
+    }
+
+    setStatus("pulling");
+    updateLastMessage(locale === "vi" ? "Dang pull toan bo Trail Days tu Turso." : "Pulling all Trail Days from Turso.");
+    appendDebugLog("turso_trail_days_pull_start", { url: maskTursoUrl(config.url) });
+    try {
+      const db = await getWaymarkDatabaseAsync();
+      const metadata = await readCurrentMetadata(db);
+      const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
+      const result = await pullAllTrailDaysFromTurso({
+        executor: db as any,
+        adapter,
+        vaultId: metadata.vault_id,
+        deviceId: metadata.device_id,
+      });
+      appendDebugLog("turso_trail_days_pull_result", result);
+      await markCloudSyncAttempt(db, metadata, result.conflicts === 0);
+      setStatus(result.conflicts > 0 ? "error" : "success");
+      updateLastMessage(
+        `Trail Days pull: fetched ${result.fetched}, inserted ${result.inserted}, updated ${result.updated}, skipped ${result.skipped}, conflicts ${result.conflicts}.`,
+      );
+      return result;
+    } catch (error) {
+      const message = formatError(error);
+      setStatus("error");
+      updateLastMessage(message);
+      appendDebugLog("turso_trail_days_pull_error", { message });
+      return null;
+    }
+  }, [appendDebugLog, config, locale, updateLastMessage]);
+
+  const pullAllMarkInstances = useCallback(async (): Promise<PullAllMarkInstancesResult | null> => {
+    if (!config) {
+      setStatus("error");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      appendDebugLog("turso_mark_instances_pull_blocked_missing_config");
+      return null;
+    }
+
+    setStatus("pulling");
+    updateLastMessage(locale === "vi" ? "Dang pull toan bo Marks tu Turso." : "Pulling all Marks from Turso.");
+    appendDebugLog("turso_mark_instances_pull_start", { url: maskTursoUrl(config.url) });
+    try {
+      const db = await getWaymarkDatabaseAsync();
+      const metadata = await readCurrentMetadata(db);
+      const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
+      const result = await pullAllMarkInstancesFromTurso({
+        executor: db as any,
+        adapter,
+        vaultId: metadata.vault_id,
+        deviceId: metadata.device_id,
+      });
+      appendDebugLog("turso_mark_instances_pull_result", result);
+      await markCloudSyncAttempt(db, metadata, result.conflicts === 0);
+      setStatus(result.conflicts > 0 ? "error" : "success");
+      updateLastMessage(
+        locale === "vi"
+          ? `Marks pull: fetched ${result.fetched}, inserted ${result.inserted}, updated ${result.updated}, skipped ${result.skipped}, conflicts ${result.conflicts}, trail days ${result.affectedTrailDays}.`
+          : `Marks pull: fetched ${result.fetched}, inserted ${result.inserted}, updated ${result.updated}, skipped ${result.skipped}, conflicts ${result.conflicts}, trail days ${result.affectedTrailDays}.`,
+      );
+      return result;
+    } catch (error) {
+      const message = formatError(error);
+      setStatus("error");
+      updateLastMessage(message);
+      appendDebugLog("turso_mark_instances_pull_error", { message });
+      return null;
+    }
+  }, [appendDebugLog, config, locale, updateLastMessage]);
 
   const clearDevRemotePushes = useCallback(async () => {
     if (!config) {
       setStatus("error");
-      setLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
+      updateLastMessage(locale === "vi" ? "Chua cau hinh Turso URL/token." : "Turso URL/token is not configured.");
       appendDebugLog("turso_clear_dev_pushes_blocked_missing_config");
       return null;
     }
 
     setStatus("clearing");
-    setLastMessage(locale === "vi" ? "Dang xoa remote pushes cua dev instance." : "Clearing remote pushes from this dev instance.");
+    updateLastMessage(locale === "vi" ? "Dang xoa remote pushes cua dev instance." : "Clearing remote pushes from this dev instance.");
     appendDebugLog("turso_clear_dev_pushes_start", { url: maskTursoUrl(config.url) });
     try {
       const db = await getWaymarkDatabaseAsync();
@@ -589,7 +717,6 @@ export function useWaymarkTursoDevSync(locale: Locale) {
         limit: 5000,
       });
       const adapter = new WaymarkTursoRemoteAdapter(createWaymarkTursoClient(config));
-      await adapter.ensureSchema();
       const result = await adapter.purgeWaymarkDevData({
         vaultId: metadata.vault_id,
         outboxRows: rows,
@@ -599,7 +726,7 @@ export function useWaymarkTursoDevSync(locale: Locale) {
         ...result,
       });
       setStatus("success");
-      setLastMessage(
+      updateLastMessage(
         locale === "vi"
           ? `Da xoa Waymark Dev tren Turso: ${result.clearedTables?.length ?? 0} bang du lieu cua vault hien tai.`
           : `Cleared Waymark Dev on Turso: ${result.clearedTables?.length ?? 0} current-vault data tables.`,
@@ -608,11 +735,11 @@ export function useWaymarkTursoDevSync(locale: Locale) {
     } catch (error) {
       const message = formatError(error);
       setStatus("error");
-      setLastMessage(message);
+      updateLastMessage(message);
       appendDebugLog("turso_clear_dev_pushes_error", { message });
       return null;
     }
-  }, [appendDebugLog, config, locale]);
+  }, [appendDebugLog, config, locale, updateLastMessage]);
 
   const downloadDebugLog = useCallback(async () => {
     const text = formatDebugLog(debugLog);
@@ -670,8 +797,12 @@ export function useWaymarkTursoDevSync(locale: Locale) {
           : "No Turso log yet. Run an upload to capture failed rows.",
     disabled: status === "uploading" || status === "pulling" || status === "clearing",
     downloadDebugLog,
+    getLastMessage: () => lastMessageRef.current ?? lastMessage,
     linkTurso,
     lastMessage,
+    pullAllTrailDays,
+    pullAllMarkInstances,
+    pullHierarchyProjection,
     pullRemoteEdits,
     pullTypedWeekPlans,
     runEodUpload: () => runUpload("eod"),
@@ -680,8 +811,6 @@ export function useWaymarkTursoDevSync(locale: Locale) {
     unlinkTurso,
     uploadAllTables,
     uploadHierarchyProjection,
-    uploadTypedWeekPlanItems,
-    uploadTypedWeekPlans,
   };
 }
 
@@ -695,6 +824,18 @@ async function readCurrentMetadata(db: {
     throw new Error("Waymark app_db_metadata is missing.");
   }
   return metadata;
+}
+
+async function readCurrentUserId(db: {
+  getFirstAsync<T>(source: string, ...params: unknown[]): Promise<T | null>;
+}): Promise<string> {
+  const profile = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM user_profiles WHERE deleted_at IS NULL ORDER BY created_at ASC LIMIT 1;",
+  );
+  if (!profile) {
+    throw new Error("Waymark local user profile is missing.");
+  }
+  return profile.id;
 }
 
 async function markCloudSyncAttempt(
@@ -761,6 +902,8 @@ function describeUploadResult(result: WaymarkTursoUploadResult): Record<string, 
     duplicateCount: result.uploaded.filter((row) => row.duplicate).length,
     failed: result.failed,
     failedCount: result.failed.length,
+    skippedCount: result.skipped.length,
+    skippedSample: result.skipped.slice(0, 20),
     stoppedAfterTransientFailure: result.stoppedAfterTransientFailure,
     trigger: result.trigger,
     uploadedCount: result.uploaded.length,
@@ -816,6 +959,64 @@ function getEnvValue(key: string): string | null {
   return value && value.trim().length > 0 ? value.trim() : null;
 }
 
+async function retryTursoPull<T>(
+  task: () => Promise<T>,
+  options: {
+    eventPrefix: string;
+    appendDebugLog(event: string, payload?: Record<string, unknown>): void;
+  },
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= TURSO_PULL_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      const message = formatError(error);
+      if (attempt >= TURSO_PULL_MAX_ATTEMPTS || !isTransientTursoPullError(error)) {
+        break;
+      }
+
+      const delayMs = TURSO_PULL_RETRY_DELAY_MS * attempt;
+      options.appendDebugLog(`${options.eventPrefix}_retry`, {
+        attempt,
+        maxAttempts: TURSO_PULL_MAX_ATTEMPTS,
+        delayMs,
+        message,
+      });
+      await delay(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+function isTransientTursoPullError(error: unknown): boolean {
+  const message = formatError(error).toLowerCase();
+  return (
+    message.length === 0 ||
+    message.includes("http error! status: 502") ||
+    message.includes("http error! status: 503") ||
+    message.includes("http error! status: 504") ||
+    message.includes("fetch failed") ||
+    message.includes("network") ||
+    message.includes("no cursor response received") ||
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    message.includes("connection") ||
+    message.includes("expected numeric turso value")
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) {
+    return error.message.trim() || error.name || "Unknown Turso error.";
+  }
+  const message = String(error).trim();
+  return message || "Unknown Turso error.";
 }

@@ -170,15 +170,23 @@ function run() {
   const contract = fs.readFileSync(contractPath, "utf8");
   assert.match(
     contract,
-    /Waymark Vault is the logical source of truth\. Local SQLite is the working copy\. Turso is the structured reconciliation store\. Google Drive is the media blob store\. Seed is static config only\./,
+    /The existing Waymark Turso database is the sole structured-data source of truth for the Vault\. Local SQLite is a disposable offline cache\/working copy\. Google Drive stores media blobs; Turso stores every `media_assets` metadata row\./,
     "Waymark source-of-truth contract must include the governing sentence.",
   );
-  assert.match(contract, /Lite must not fork truth\./, "Waymark Lite must be documented as a filtered client, not a separate truth.");
-  assert.match(contract, /Waymark outbound sync is batch-driven\. Typed Turso planning intake is Manual Pull only\./, "SSOT contract must require manual typed-planning intake.");
-  assert.match(contract, /Explicit user action through an Upload\/Sync button\./, "SSOT contract must allow manual upload button sync.");
-  assert.match(contract, /Turso rows must not be read directly by screens as live UI state\./, "SSOT contract must keep UI local-first for inbound remote edits.");
-  assert.match(contract, /Every canonical Waymark table must have a Turso projection plan\./, "SSOT contract must require a Turso projection plan for every canonical table.");
-  assert.match(contract, /Weekly timetable and Signal tables are first-class `editable_remote` tables:/, "SSOT contract must mark weekly timetable and Signals as remote-editable.");
+  assert.match(contract, /Lite may filter features and views but must not fork truth\./, "Waymark Lite must be documented as a filtered client, not a separate truth.");
+  assert.match(contract, /Screens render from local SQLite and do not query Turso directly\./, "SSOT contract must keep screens on the local cache.");
+  assert.match(contract, /The production drain point is EOD, normally after Close Trail:/, "SSOT contract must require EOD outbound mutation drain.");
+  assert.match(contract, /Workspace-owned rows are rejected from the Waymark outbox\./, "SSOT contract must enforce writer ownership.");
+  assert.match(contract, /Every other local SQLite table is migrated into that same database\./, "SSOT contract must require all tables in the existing Turso database.");
+  assert.match(contract, /Catalog\/templates \| Workspace publisher/, "SSOT contract must keep catalog publishing in the workspace.");
+  assert.match(contract, /Human-readable names and titles are not unique keys\./, "SSOT contract must not forbid same-title semantic duplicates.");
+  assert.match(contract, /Export migration must not insert, update, delete, tombstone, recreate, or replace them\./, "SSOT contract must protect the live baseline tables.");
+
+  const fullDbAdrPath = path.join(repoRoot, "docs", "waymark-turso-full-database-v2.md");
+  assert.equal(fs.existsSync(fullDbAdrPath), true, "Turso Full-DB v2 ADR must exist.");
+  const fullDbAdr = fs.readFileSync(fullDbAdrPath, "utf8");
+  assert.match(fullDbAdr, /Replacement database\/branch: forbidden/, "Full-DB cutover must stay in the existing Turso database.");
+  assert.match(fullDbAdr, /`paths`, `expeditions`, and `mark_instances` retain their current remote rows/, "ADR must name protected live baselines.");
 
   const planningContractPath = path.join(repoRoot, "docs", "waymark-turso-planning-contract.md");
   assert.equal(fs.existsSync(planningContractPath), true, "Typed Turso planning contract doc must exist.");
@@ -214,7 +222,7 @@ function run() {
   for (const markdownPath of markdownFiles) {
     const source = fs.readFileSync(path.join(repoRoot, markdownPath), "utf8");
     assertDoesNotContain(source, /Phone owns the truth|phone owns truth|SQLite\s*\|\s*Source of truth|Cloud not source of truth|Phone remains source/i, `Documentation must use the Waymark Vault source-of-truth model: ${markdownPath}`);
-    assertDoesNotContain(source, /Turso (alone )?is (the )?source of truth/i, `Documentation must not name Turso as sole source of truth: ${markdownPath}`);
+    assertDoesNotContain(source, /Turso is a structured sync and restore layer|Turso is still not the sole source of truth|Waymark-primary activity tables/i, `Documentation must not retain the legacy projection authority model: ${markdownPath}`);
   }
 
   const gitignore = fs.readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
@@ -233,6 +241,21 @@ function run() {
   const bootstrapSource = readFile(path.join("src", "waymark-map", "bootstrap.ts"));
   assert.match(bootstrapSource, /canSeedEntity\("daily_mark_assignment"/, "Production seed must guard dailyMarkAssignments.");
   assert.match(bootstrapSource, /canSeedEntity\("backlog_item"/, "Production seed must guard backlogItems.");
+
+  const tursoHookSource = readFile(path.join("src", "app", "useWaymarkTursoDevSync.ts"));
+  assert.match(tursoHookSource, /runWaymarkTursoPull/, "App Turso pull actions must use the shared coordinator.");
+  assertDoesNotContain(
+    tursoHookSource,
+    /\bpullWaymarkFullDatabase(?:Snapshot|Changes)\b|\bpullTypedPlanning(?:FromTurso|WeekPlansFromTurso)\b/,
+    "App Turso pull actions must not bypass the shared coordinator.",
+  );
+
+  const shellSource = readFile(path.join("src", "screens", "WaymarkShellApp.tsx"));
+  assert.match(
+    shellSource,
+    /ENABLE_PREVIEW_ME_TOOLS\s*\?\s*\[\{\s*id:\s*"dev-weekly-imports"/,
+    "Legacy weekly import controls must remain behind the explicit dev/preview tools gate.",
+  );
 }
 
 run();

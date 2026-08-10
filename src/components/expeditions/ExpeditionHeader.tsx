@@ -9,8 +9,6 @@ import {
   formatExpeditionDateRangeLong,
   getExpeditionStatusTone,
   getStatusLabel,
-  resolveExpeditionPathId,
-  resolvePathChipIcon,
 } from "./detailModel";
 import { getCopy } from "../../i18n/copy";
 
@@ -22,7 +20,6 @@ type Props = {
 
 export function ExpeditionHeader({ expedition, locale, onBack }: Props) {
   const copy = getCopy(locale).expeditionDetail;
-  const pathId = resolveExpeditionPathId(expedition);
   const subtitleParts = [expedition.subtitle, formatExpeditionDateRangeLong(expedition.startDate, expedition.endDate, locale)].filter(Boolean);
 
   return (
@@ -46,12 +43,7 @@ export function ExpeditionHeader({ expedition, locale, onBack }: Props) {
 
       <View style={styles.chipRow}>
         <EntityChip label={getStatusLabel(expedition.status, locale)} size="compact" stateTone={getExpeditionStatusTone(expedition.status)} variant="status" />
-        <EntityChip
-          iconSemanticName={resolvePathChipIcon(pathId)}
-          label={expedition.pathName}
-          size="compact"
-          variant="entity"
-        />
+        <EntityChip label={expedition.pathName} size="compact" variant="entity" />
         {expedition.daysLeftLabel ? <EntityChip iconSemanticName="utility.calendar" label={expedition.daysLeftLabel} size="compact" variant="metadata" /> : null}
       </View>
     </View>

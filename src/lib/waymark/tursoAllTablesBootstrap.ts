@@ -1,6 +1,7 @@
 import { WAYMARK_TABLES, type WaymarkTableName } from "../../db/constants";
 import type { SQLiteQueryable } from "../../db/adapters/SQLiteRepositoryBase";
 import { enqueueSyncOutboxMutation, type SyncOutboxEntityType, type SyncOutboxRow } from "./ssotOutbox";
+import { canBootstrapWaymarkActivityTable } from "./tursoDataOwnership";
 
 type CanonicalTableSpec = {
   tableName: WaymarkTableName;
@@ -68,6 +69,9 @@ export const WAYMARK_TURSO_CANONICAL_TABLES: readonly CanonicalTableSpec[] = [
   table(WAYMARK_TABLES.exerciseProgressStates, "exercise_progress_state"),
 ] as const;
 
+export const WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES: readonly CanonicalTableSpec[] =
+  WAYMARK_TURSO_CANONICAL_TABLES.filter((spec) => canBootstrapWaymarkActivityTable(spec.tableName));
+
 export async function enqueueAllWaymarkTablesForTursoUpload(
   input: WaymarkAllTablesBootstrapInput,
 ): Promise<WaymarkAllTablesBootstrapResult> {
@@ -76,7 +80,7 @@ export async function enqueueAllWaymarkTablesForTursoUpload(
   let scanned = 0;
   let enqueued = 0;
 
-  for (const spec of WAYMARK_TURSO_CANONICAL_TABLES) {
+  for (const spec of WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES) {
     const rows = await input.executor.getAllAsync<Record<string, unknown>>(
       `SELECT * FROM ${spec.tableName} ORDER BY ${spec.orderBy} ASC LIMIT ?;`,
       input.limitPerTable ?? 100000,

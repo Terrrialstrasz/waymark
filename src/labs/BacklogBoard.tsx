@@ -70,14 +70,12 @@ export function BacklogBoard({ locale }: Props) {
       >
         <BacklogTemplate
           featureFlags={{
-            canAddToWeeklyCoding: true,
             canCreateMarkFromBacklog: true,
             canDeleteBacklogItem: true,
             hasBacklogDetail: true,
           }}
           items={baseItems}
           locale={locale}
-          onAddToWeeklyCoding={(itemId) => Alert.alert("Weekly coding", itemId)}
           onBack={() => Alert.alert("Back", "Backlog")}
           onCreateMarkFromBacklog={(itemId) => Alert.alert("Create mark", itemId)}
           onDeleteBacklogItem={(itemId) => Alert.alert("Delete", itemId)}
@@ -131,12 +129,10 @@ export function BacklogBoard({ locale }: Props) {
           />
           <BacklogInlineActionMenu
             anchor={{ x: 280, y: 280, width: 44, height: 44 }}
-            canAddToWeeklyCoding
             canCreateMarkFromBacklog
             canDeleteBacklogItem
             item={menuItem}
             locale={locale}
-            onAddToWeeklyCoding={(itemId) => Alert.alert("Weekly coding", itemId)}
             onClose={() => setMenuVisible(false)}
             onCreateMarkFromBacklog={(itemId) => Alert.alert("Create mark", itemId)}
             onDeleteBacklogItem={(itemId) => Alert.alert("Delete", itemId)}

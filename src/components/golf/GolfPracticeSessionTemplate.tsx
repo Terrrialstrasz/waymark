@@ -13,6 +13,7 @@ import {
   GolfWorkoutType,
   SaveGolfPracticeLogInput,
 } from "../../types/golfPractice";
+import type { GolfProgramPracticePlan, GolfProgramSetPlan } from "../../config/golfProgramCatalog";
 import { foundationColors, semanticRadius, spacing } from "../../theme/tokens";
 import { Locale } from "../../types/ui";
 import { FieldJournalScreenShell } from "../primitives/FieldJournalScreenShell";
@@ -23,16 +24,19 @@ import { WMButton } from "../primitives/WMButton";
 import { WMText } from "../primitives/Text";
 import { WaymarkIcon } from "../primitives/WaymarkIcon";
 
-type GolfPhase = "warmup" | "practice" | "complete";
+type GolfPhase = "warmup" | "revision" | "practice" | "complete";
 
 type Props = {
   locale: Locale;
   initialWorkoutType?: GolfWorkoutType;
   workoutTypeLocked?: boolean;
   saving?: boolean;
+  reviewOnly?: boolean;
+  reviewTitle?: string;
   shortGamePlan?: GolfShortGameSetPlan[] | null;
+  swingPlan?: GolfProgramPracticePlan | null;
   onBack?: () => void;
-  onSave: (input: SaveGolfPracticeLogInput) => void;
+  onSave?: (input: SaveGolfPracticeLogInput) => void;
 };
 
 type Option<T extends string> = {
@@ -41,8 +45,15 @@ type Option<T extends string> = {
 };
 
 type SwingSetDraft = {
+  key: string;
   setNumber: number;
+  setRole: "revision" | "practice";
+  programWeek?: number;
+  sourceWeek?: number;
+  skillTitle?: string;
+  reps: number;
   club: GolfClub;
+  clubs?: GolfClub[];
   shotType: GolfShotType;
   practiceMode: GolfPracticeMode;
   distanceValues: string[];
@@ -66,6 +77,7 @@ const CLUB_OPTIONS: Option<GolfClub>[] = [
   { value: "snag_launcher", label: "SNAG Launcher" },
   { value: "snag_roller", label: "SNAG Roller" },
   { value: "snag_snapper", label: "SNAG Snapper" },
+  { value: "sand_wedge", label: "Sand Wedge" },
   { value: "pitching_wedge", label: "Pitching Wedge" },
   { value: "iron_9", label: "9 Iron" },
   { value: "iron_8", label: "8 Iron" },
@@ -104,26 +116,55 @@ function makeShortGameState(plan: GolfShortGameSetPlan[] | null | undefined) {
   >;
 }
 
-function makeSwingSets(): SwingSetDraft[] {
+function makeSwingSetDraft(plan: GolfProgramSetPlan): SwingSetDraft {
+  return {
+    key: `${plan.role}-${plan.sourceWeek}-${plan.setNumber}`,
+    setNumber: plan.setNumber,
+    setRole: plan.role,
+    programWeek: plan.programWeek,
+    sourceWeek: plan.sourceWeek,
+    skillTitle: plan.title,
+    reps: plan.reps,
+    club: plan.clubs[0] ?? "snag_launcher",
+    clubs: plan.clubs,
+    shotType: plan.shotType,
+    practiceMode: plan.practiceMode,
+    distanceValues: Array.from({ length: plan.reps }, () => ""),
+    coachScores: Array.from({ length: plan.reps }, () => ""),
+  };
+}
+
+function makeSwingSets(plan?: GolfProgramPracticePlan | null): SwingSetDraft[] {
+  if (plan) {
+    return [...plan.revisionSets, ...plan.practiceSets].map(makeSwingSetDraft);
+  }
   return [1, 2, 3].map((setNumber) => ({
+    key: `practice-legacy-${setNumber}`,
     setNumber,
-    club: "snag_launcher",
-    shotType: "chip",
-    practiceMode: "distance",
+    setRole: "practice" as const,
+    reps: SWING_REPS_PER_SET,
+    club: "snag_launcher" as const,
+    clubs: ["snag_launcher" as const],
+    shotType: "chip" as const,
+    practiceMode: "distance" as const,
     distanceValues: Array.from({ length: SWING_REPS_PER_SET }, () => ""),
     coachScores: Array.from({ length: SWING_REPS_PER_SET }, () => ""),
   }));
 }
 
-function makeSwingCompletedState() {
-  return Object.fromEntries([1, 2, 3].map((setNumber) => [setNumber, false])) as Record<number, boolean>;
+function makeSwingCompletedState(sets: SwingSetDraft[]) {
+  return Object.fromEntries(sets.map((set) => [set.key, false])) as Record<string, boolean>;
 }
 
 export function GolfPracticeSessionTemplate({
+  locale,
   initialWorkoutType = "putting",
   workoutTypeLocked = false,
   saving = false,
+  reviewOnly = false,
+  reviewTitle,
   shortGamePlan = null,
+  swingPlan = null,
   onBack,
   onSave,
 }: Props) {
@@ -132,8 +173,8 @@ export function GolfPracticeSessionTemplate({
   const [warmupCompleted, setWarmupCompleted] = useState<boolean[]>(() => WARMUP_EXERCISES.map(() => false));
   const [puttingResults, setPuttingResults] = useState<Record<number, Array<GolfRepResult | null>>>(makePuttingState);
   const [shortGameResults, setShortGameResults] = useState<Record<number, Array<GolfRepResult | null>>>(() => makeShortGameState(shortGamePlan));
-  const [swingSets, setSwingSets] = useState<SwingSetDraft[]>(makeSwingSets);
-  const [swingCompleted, setSwingCompleted] = useState<Record<number, boolean>>(makeSwingCompletedState);
+  const [swingSets, setSwingSets] = useState<SwingSetDraft[]>(() => makeSwingSets(swingPlan));
+  const [swingCompleted, setSwingCompleted] = useState<Record<string, boolean>>(() => makeSwingCompletedState(makeSwingSets(swingPlan)));
   const [note, setNote] = useState("");
   const scrollViewRef = useRef<ScrollView | null>(null);
   const warmupLayoutRef = useRef<Record<number, { y: number; height: number }>>({});
@@ -156,9 +197,24 @@ export function GolfPracticeSessionTemplate({
     setShortGameResults(makeShortGameState(shortGamePlan));
   }, [shortGamePlanKey]);
 
+  const swingPlanKey = useMemo(
+    () =>
+      swingPlan
+        ? `${swingPlan.programWeek}:${swingPlan.revisionSets.length}:${swingPlan.practiceSets.length}:${swingPlan.title}`
+        : "legacy",
+    [swingPlan],
+  );
+  useEffect(() => {
+    const nextSets = makeSwingSets(swingPlan);
+    setSwingSets(nextSets);
+    setSwingCompleted(makeSwingCompletedState(nextSets));
+  }, [swingPlanKey]);
+
   const warmupDone = warmupCompleted.every(Boolean);
   const warmupActiveIndex = Math.max(0, warmupCompleted.findIndex((done) => !done));
   const shortGameActive = workoutType === "putting" && Boolean(shortGamePlan?.length);
+  const revisionSwingSets = useMemo(() => swingSets.filter((set) => set.setRole === "revision"), [swingSets]);
+  const practiceSwingSets = useMemo(() => swingSets.filter((set) => set.setRole === "practice"), [swingSets]);
   const puttingSets = useMemo<GolfPuttingSetInput[]>(
     () =>
       PUTTING_DISTANCES.map((distanceCm) => {
@@ -193,8 +249,13 @@ export function GolfPracticeSessionTemplate({
         const averageFormScore = formScores.length ? formScores.reduce((total, value) => total + value, 0) / formScores.length : undefined;
         return {
           setNumber: set.setNumber,
-          reps: SWING_REPS_PER_SET,
+          setRole: set.setRole,
+          programWeek: set.programWeek,
+          sourceWeek: set.sourceWeek,
+          skillTitle: set.skillTitle,
+          reps: set.reps,
           club: set.club,
+          clubs: set.clubs,
           shotType: set.shotType,
           practiceMode: set.practiceMode,
           distancesYards: set.practiceMode === "distance" ? distancesYards : undefined,
@@ -204,37 +265,46 @@ export function GolfPracticeSessionTemplate({
       }),
     [swingSets],
   );
+  const revisionDone = workoutType !== "swing" || revisionSwingSets.length === 0 || revisionSwingSets.every((set) => swingCompleted[set.key]);
+  const practiceSwingDone = practiceSwingSets.every((set) => swingCompleted[set.key]);
   const practiceDone =
     workoutType === "putting"
       ? shortGameActive
         ? shortGameSets.every((set) => set.repResults?.length === set.reps)
         : puttingSets.every((set) => set.repResults?.length === set.reps)
-      : swingSets.every((set) => swingCompleted[set.setNumber]);
+      : revisionDone && practiceSwingDone;
   const canSave = warmupDone && practiceDone && !saving;
   const activePracticeIndex =
     workoutType === "putting"
       ? Math.max(0, (shortGameActive ? shortGameSets : puttingSets).findIndex((set) => set.repResults?.length !== set.reps))
       : Math.max(
           0,
-          swingSets.findIndex((set) => !swingCompleted[set.setNumber]),
+          practiceSwingSets.findIndex((set) => !swingCompleted[set.key]),
         );
+  const activeRevisionIndex = Math.max(
+    0,
+    revisionSwingSets.findIndex((set) => !swingCompleted[set.key]),
+  );
   const progressTotal =
     phase === "warmup" ? WARMUP_EXERCISES.length
-    : phase === "practice" ? workoutType === "putting" ? shortGameActive ? shortGameSets.length : PUTTING_DISTANCES.length : swingSets.length
+    : phase === "revision" ? revisionSwingSets.length || 1
+    : phase === "practice" ? workoutType === "putting" ? shortGameActive ? shortGameSets.length : PUTTING_DISTANCES.length : practiceSwingSets.length
     : 1;
   const progressCurrent =
     phase === "warmup" ? Math.min(warmupActiveIndex + 1, WARMUP_EXERCISES.length)
+    : phase === "revision" ? revisionDone ? progressTotal : activeRevisionIndex + 1
     : phase === "practice" ? practiceDone ? progressTotal : activePracticeIndex + 1
     : phase === "complete" ? 1
     : 1;
   const progressLabel =
     phase === "warmup" ? "Warm-up"
+    : phase === "revision" ? "Revision"
     : phase === "practice" ? workoutType === "putting" ? "Short Game" : "Swing"
     : "Complete";
 
-  const updateSwingSet = (setNumber: number, patch: Partial<SwingSetDraft>) => {
-    setSwingCompleted((current) => ({ ...current, [setNumber]: false }));
-    setSwingSets((current) => current.map((set) => (set.setNumber === setNumber ? { ...set, ...patch } : set)));
+  const updateSwingSet = (key: string, patch: Partial<SwingSetDraft>) => {
+    setSwingCompleted((current) => ({ ...current, [key]: false }));
+    setSwingSets((current) => current.map((set) => (set.key === key ? { ...set, ...patch } : set)));
   };
 
   const updatePuttingRep = (distanceCm: number, repIndex: number, result: GolfRepResult) => {
@@ -253,23 +323,23 @@ export function GolfPracticeSessionTemplate({
     });
   };
 
-  const updateSwingRep = (setNumber: number, repIndex: number, value: string) => {
-    setSwingCompleted((current) => ({ ...current, [setNumber]: false }));
+  const updateSwingRep = (key: string, repIndex: number, value: string) => {
+    setSwingCompleted((current) => ({ ...current, [key]: false }));
     setSwingSets((current) =>
       current.map((set) => {
-        if (set.setNumber !== setNumber) {
+        if (set.key !== key) {
           return set;
         }
-        const key = set.practiceMode === "distance" ? "distanceValues" : "coachScores";
-        const values = [...set[key]];
+        const valueKey = set.practiceMode === "distance" ? "distanceValues" : "coachScores";
+        const values = [...set[valueKey]];
         values[repIndex] = value;
-        return { ...set, [key]: values };
+        return { ...set, [valueKey]: values };
       }),
     );
   };
 
-  const completeSwingSet = (setNumber: number) => {
-    setSwingCompleted((current) => ({ ...current, [setNumber]: true }));
+  const completeSwingSet = (key: string) => {
+    setSwingCompleted((current) => ({ ...current, [key]: true }));
   };
 
   const focusActiveWarmup = (retryCount = 0) => {
@@ -356,7 +426,7 @@ export function GolfPracticeSessionTemplate({
   }, [phase, workoutType, activePracticeIndex, practiceDone]);
 
   const handleSave = () => {
-    if (!canSave) {
+    if (!canSave || !onSave) {
       return;
     }
     onSave({
@@ -369,6 +439,19 @@ export function GolfPracticeSessionTemplate({
     });
     setPhase("complete");
   };
+
+  if (reviewOnly) {
+    return (
+      <GolfPracticeReview
+        locale={locale}
+        onBack={onBack}
+        reviewTitle={reviewTitle}
+        shortGamePlan={shortGamePlan}
+        swingPlan={swingPlan}
+        workoutType={initialWorkoutType}
+      />
+    );
+  }
 
   return (
     <FieldJournalScreenShell contentContainerStyle={styles.shellContent} scrollable={false} variant="noBottomNav">
@@ -418,7 +501,52 @@ export function GolfPracticeSessionTemplate({
                 </View>
               ))}
               <View style={styles.footerAction}>
-                <WMButton disabled={!warmupDone} fullWidth label="Continue to practice" onPress={() => setPhase("practice")} variant="primary" />
+                <WMButton
+                  disabled={!warmupDone}
+                  fullWidth
+                  label={revisionSwingSets.length > 0 && workoutType === "swing" ? "Continue to revision" : "Continue to practice"}
+                  onPress={() => setPhase(revisionSwingSets.length > 0 && workoutType === "swing" ? "revision" : "practice")}
+                  variant="primary"
+                />
+              </View>
+            </View>
+          ) : null}
+
+          {phase === "revision" && workoutType === "swing" ? (
+            <View style={styles.exerciseList}>
+              {revisionSwingSets.map((set, index) => {
+                const values = set.practiceMode === "distance" ? set.distanceValues : set.coachScores;
+                const readyToComplete = values.every((value) => typeof parseNonNegativeNumber(value) === "number");
+                const completed = swingCompleted[set.key] ?? false;
+                return (
+                  <View
+                    key={set.key}
+                    onLayout={(event: LayoutChangeEvent) => {
+                      practiceLayoutRef.current[index] = event.nativeEvent.layout;
+                    }}
+                  >
+                    <GolfSwingAccordion
+                      completed={completed}
+                      readyToComplete={readyToComplete}
+                      expanded={!revisionDone && index === activeRevisionIndex}
+                      set={set}
+                      totalSets={revisionSwingSets.length}
+                      onChange={(patch) => updateSwingSet(set.key, patch)}
+                      onComplete={() => completeSwingSet(set.key)}
+                      onChangeRep={(repIndex, value) => updateSwingRep(set.key, repIndex, value)}
+                      onFocusRepInput={(repIndex) => requestAnimationFrame(() => focusInputField(`swing-${set.key}-${repIndex}`))}
+                      onLayoutRepInput={(repIndex, event) => {
+                        inputLayoutRef.current[`swing-${set.key}-${repIndex}`] = {
+                          y: (practiceLayoutRef.current[index]?.y ?? 0) + event.nativeEvent.layout.y,
+                          height: event.nativeEvent.layout.height,
+                        };
+                      }}
+                    />
+                  </View>
+                );
+              })}
+              <View style={styles.footerAction}>
+                <WMButton disabled={!revisionDone} fullWidth label="Continue to practice" onPress={() => setPhase("practice")} variant="primary" />
               </View>
             </View>
           ) : null}
@@ -478,16 +606,16 @@ export function GolfPracticeSessionTemplate({
 
           {phase === "practice" && workoutType === "swing" ? (
             <View style={styles.exerciseList}>
-              {swingSets.map((set) => {
+              {practiceSwingSets.map((set, index) => {
                 const values = set.practiceMode === "distance" ? set.distanceValues : set.coachScores;
                 const readyToComplete = values.every((value) => typeof parseNonNegativeNumber(value) === "number");
-                const completed = swingCompleted[set.setNumber] ?? false;
+                const completed = swingCompleted[set.key] ?? false;
                 return (
                   <View
-                    key={set.setNumber}
+                    key={set.key}
                     onLayout={(event: LayoutChangeEvent) => {
-                      practiceLayoutRef.current[set.setNumber - 1] = event.nativeEvent.layout;
-                      if (phase === "practice" && workoutType === "swing" && set.setNumber === activePracticeIndex + 1 && !practiceDone) {
+                      practiceLayoutRef.current[index] = event.nativeEvent.layout;
+                      if (phase === "practice" && workoutType === "swing" && index === activePracticeIndex && !practiceDone) {
                         requestAnimationFrame(() => focusActivePractice());
                       }
                     }}
@@ -495,16 +623,16 @@ export function GolfPracticeSessionTemplate({
                     <GolfSwingAccordion
                       completed={completed}
                       readyToComplete={readyToComplete}
-                      expanded={set.setNumber === activePracticeIndex + 1 && !practiceDone}
+                      expanded={index === activePracticeIndex && !practiceDone}
                       set={set}
-                      totalSets={swingSets.length}
-                      onChange={(patch) => updateSwingSet(set.setNumber, patch)}
-                      onComplete={() => completeSwingSet(set.setNumber)}
-                      onChangeRep={(repIndex, value) => updateSwingRep(set.setNumber, repIndex, value)}
-                      onFocusRepInput={(repIndex) => requestAnimationFrame(() => focusInputField(`swing-${set.setNumber}-${repIndex}`))}
+                      totalSets={practiceSwingSets.length}
+                      onChange={(patch) => updateSwingSet(set.key, patch)}
+                      onComplete={() => completeSwingSet(set.key)}
+                      onChangeRep={(repIndex, value) => updateSwingRep(set.key, repIndex, value)}
+                      onFocusRepInput={(repIndex) => requestAnimationFrame(() => focusInputField(`swing-${set.key}-${repIndex}`))}
                       onLayoutRepInput={(repIndex, event) => {
-                        inputLayoutRef.current[`swing-${set.setNumber}-${repIndex}`] = {
-                          y: (practiceLayoutRef.current[set.setNumber - 1]?.y ?? 0) + event.nativeEvent.layout.y,
+                        inputLayoutRef.current[`swing-${set.key}-${repIndex}`] = {
+                          y: (practiceLayoutRef.current[index]?.y ?? 0) + event.nativeEvent.layout.y,
                           height: event.nativeEvent.layout.height,
                         };
                       }}
@@ -556,6 +684,77 @@ export function GolfPracticeSessionTemplate({
         </ScrollView>
       </View>
     </FieldJournalScreenShell>
+  );
+}
+
+function GolfPracticeReview({
+  locale,
+  onBack,
+  reviewTitle,
+  shortGamePlan,
+  swingPlan,
+  workoutType,
+}: {
+  locale: Locale;
+  onBack?: () => void;
+  reviewTitle?: string;
+  shortGamePlan?: GolfShortGameSetPlan[] | null;
+  swingPlan?: GolfProgramPracticePlan | null;
+  workoutType: GolfWorkoutType;
+}) {
+  const swingSets = swingPlan ? [...swingPlan.revisionSets, ...swingPlan.practiceSets] : [];
+  return (
+    <FieldJournalScreenShell contentContainerStyle={styles.shellContent} variant="navAware">
+      <PageHeader
+        onBack={onBack}
+        showBack
+        subtitle={workoutType === "putting" ? "Short Game" : "Swing"}
+        title={reviewTitle ?? swingPlan?.title ?? "Golf Practice"}
+        variant="withBack"
+      />
+      <View style={styles.reviewBanner}>
+        <WMText style={styles.reviewBannerTitle} variant="label">Review only</WMText>
+        <WMText style={styles.reviewBannerBody} variant="bodySm">
+          {locale === "vi"
+            ? "Mo tu Weekly Timetable. Buoi tap golf nay khong duoc tinh vao progress."
+            : "Opened from Weekly Timetable. This golf session is not counted toward progress."}
+        </WMText>
+      </View>
+
+      <ReviewList title="Warm-up" items={WARMUP_EXERCISES.map((title) => ({ title }))} />
+      {workoutType === "putting" ? (
+        <ReviewList
+          title="Short Game"
+          items={
+            shortGamePlan?.length
+              ? shortGamePlan.map((set) => ({ title: set.label, detail: `${set.reps} reps` }))
+              : PUTTING_DISTANCES.map((distance) => ({ title: `${distance} cm`, detail: "10 putts" }))
+          }
+        />
+      ) : (
+        <ReviewList
+          title={swingPlan?.title ?? "Swing plan"}
+          items={swingSets.map((set) => ({
+            title: set.title,
+            detail: `${set.role === "revision" ? "Revision" : "Practice"} · ${set.reps} reps · ${set.clubs.join(", ")} · ${set.practiceMode}`,
+          }))}
+        />
+      )}
+    </FieldJournalScreenShell>
+  );
+}
+
+function ReviewList({ title, items }: { title: string; items: Array<{ title: string; detail?: string }> }) {
+  return (
+    <View style={styles.reviewSection}>
+      <WMText variant="sectionTitle">{title}</WMText>
+      {items.map((item, index) => (
+        <JournalCard contentStyle={styles.reviewCard} key={`${title}:${index}:${item.title}`} variant="nested">
+          <WMText variant="bodyStrong">{item.title}</WMText>
+          {item.detail ? <WMText style={styles.reviewDetail} variant="bodySm">{item.detail}</WMText> : null}
+        </JournalCard>
+      ))}
+    </View>
   );
 }
 
@@ -717,16 +916,18 @@ function GolfSwingAccordion({
   onFocusRepInput: (repIndex: number) => void;
   onLayoutRepInput: (repIndex: number, event: LayoutChangeEvent) => void;
 }) {
-  const club = CLUB_OPTIONS.find((option) => option.value === set.club)?.label ?? "Club";
+  const club = formatClubPlan(set.clubs?.length ? set.clubs : [set.club], set.reps);
   const shot = SHOT_OPTIONS.find((option) => option.value === set.shotType)?.label ?? "Shot";
   const mode = MODE_OPTIONS.find((option) => option.value === set.practiceMode)?.label ?? "Record";
   const values = set.practiceMode === "distance" ? set.distanceValues : set.coachScores;
   const recorded = values.filter((value) => typeof parseNonNegativeNumber(value) === "number").length;
+  const roleLabel = set.setRole === "revision" ? "Revision" : "Practice";
+  const title = set.skillTitle ? `${roleLabel}: ${set.skillTitle}` : `Swing Set ${set.setNumber}`;
   return (
-    <GolfExerciseCard completed={completed} expanded={expanded} index={set.setNumber - 1} prescription={`${SWING_REPS_PER_SET} reps - ${club} / ${shot} / ${mode}`} title={`Swing Set ${set.setNumber}`}>
-      <GolfSetRow active completed={completed} label={`${SWING_REPS_PER_SET} reps`} meta={completed ? "Recorded" : `${recorded}/${SWING_REPS_PER_SET} recorded`} number={1}>
+    <GolfExerciseCard completed={completed} expanded={expanded} index={set.setNumber - 1} prescription={`${set.reps} reps - ${club} / ${shot} / ${mode}`} title={title}>
+      <GolfSetRow active completed={completed} label={`${set.reps} reps`} meta={completed ? "Recorded" : `${recorded}/${set.reps} recorded`} number={set.setNumber}>
         <View style={styles.inlineDropdownRow}>
-          <Dropdown compact label="Club" options={CLUB_OPTIONS} value={set.club} onChange={(value) => onChange({ club: value })} />
+          <Dropdown compact label="Club" options={CLUB_OPTIONS} value={set.club} onChange={(value) => onChange({ club: value, clubs: [value] })} />
           <Dropdown compact label="Shot" options={SHOT_OPTIONS} value={set.shotType} onChange={(value) => onChange({ shotType: value })} />
           <Dropdown compact label="Record" options={MODE_OPTIONS} value={set.practiceMode} onChange={(value) => onChange({ practiceMode: value })} />
         </View>
@@ -755,6 +956,21 @@ function GolfSwingAccordion({
       </View>
     </GolfExerciseCard>
   );
+}
+
+function formatClubPlan(clubs: GolfClub[], reps: number) {
+  const uniqueClubs = [...new Set(clubs)];
+  if (uniqueClubs.length <= 1) {
+    return CLUB_OPTIONS.find((option) => option.value === uniqueClubs[0])?.label ?? "Club";
+  }
+  const baseReps = Math.floor(reps / uniqueClubs.length);
+  const extra = reps % uniqueClubs.length;
+  return uniqueClubs
+    .map((club, index) => {
+      const label = CLUB_OPTIONS.find((option) => option.value === club)?.label ?? club;
+      return `${baseReps + (index < extra ? 1 : 0)} ${label}`;
+    })
+    .join(" + ");
 }
 
 function GolfPuttingRepRow({
@@ -1055,6 +1271,19 @@ const styles = StyleSheet.create({
   shellContent: { paddingHorizontal: 16 },
   screen: { flex: 1, gap: spacing.sm },
   content: { gap: spacing.sm, paddingBottom: 120 },
+  reviewBanner: {
+    gap: spacing.xxs,
+    borderRadius: semanticRadius.card.default,
+    borderWidth: 1,
+    borderColor: foundationColors.border.active,
+    backgroundColor: foundationColors.bg.paperWarm,
+    padding: spacing.md,
+  },
+  reviewBannerTitle: { color: foundationColors.ink.primary },
+  reviewBannerBody: { color: foundationColors.ink.secondary },
+  reviewSection: { gap: spacing.sm },
+  reviewCard: { gap: spacing.xxs },
+  reviewDetail: { color: foundationColors.ink.secondary },
   segmented: { flexDirection: "row", gap: spacing.xs, borderRadius: semanticRadius.card.compact, backgroundColor: foundationColors.bg.paperWarm, padding: 4 },
   controlDisabled: { opacity: 0.72 },
   segment: { minHeight: 40, flex: 1, alignItems: "center", justifyContent: "center", borderRadius: semanticRadius.button.default },

@@ -191,9 +191,9 @@ export function useWaymarkToday(locale: Locale, options: { enabled?: boolean } =
   const refresh = useCallback(
     (preserveData = state.status === "ready") => {
       if (!enabled) {
-        return;
+        return Promise.resolve();
       }
-      void loadToday({ preserveData });
+      return loadToday({ preserveData });
     },
     [enabled, loadToday, state.status],
   );
@@ -585,6 +585,9 @@ function mapMarkToTodayItem(
     id: mark.id,
     title: { en: mark.title, vi: mark.title },
     pathId,
+    pathEntityId: mark.pathId,
+    expeditionId: mark.expeditionId,
+    milestoneId: mark.milestoneId,
     status,
     interactionKind: isWorkoutMark ? "strength_session" : isGolfPracticeMark ? "golf_practice" : "default",
     summary: buildMarkSummary(mark, locale),

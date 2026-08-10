@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { applyMigrationsAsync } from "../src/db/migrations/runner";
 import {
+  WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES,
   WAYMARK_TURSO_CANONICAL_TABLES,
   enqueueSyncOutboxMutation,
   enqueueAllWaymarkTablesForTursoUpload,
@@ -62,13 +63,17 @@ async function run() {
   assert.equal(WAYMARK_TURSO_CANONICAL_TABLES.some((table) => table.entityType === "path"), true);
   assert.equal(WAYMARK_TURSO_CANONICAL_TABLES.some((table) => table.entityType === "week_plan_item"), true);
   assert.equal(WAYMARK_TURSO_CANONICAL_TABLES.some((table) => table.entityType === "signal"), true);
+  assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "path"), false);
+  assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "week_plan_item"), false);
+  assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "mark_template"), false);
+  assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "signal"), true);
 
   const harness = await createHarness();
   try {
     const schema = await harness.db.getFirstAsync<{ version: number }>(
       "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1;",
     );
-    assert.equal(schema?.version, 21);
+    assert.equal(schema?.version, 23);
     const planningState = await harness.db.getFirstAsync<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_sync_state' LIMIT 1;",
     );
@@ -78,21 +83,23 @@ async function run() {
     const planningRetries = await harness.db.getFirstAsync<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_side_effect_retries' LIMIT 1;",
     );
+    const planningConflicts = await harness.db.getFirstAsync<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_conflicts' LIMIT 1;",
+    );
     assert.equal(planningState?.name, "planning_sync_state");
     assert.equal(planningEntityState?.name, "planning_entity_state");
     assert.equal(planningRetries?.name, "planning_side_effect_retries");
+    assert.equal(planningConflicts?.name, "planning_conflicts");
 
     await harness.db.runAsync(
-      `INSERT INTO paths (
-        id, user_id, name, subtitle, slug, title, description, status, color_token, icon_key,
-        sort_order, is_active, hero_media_asset_id, created_at, updated_at, deleted_at, sync_status, local_revision
-      ) VALUES (?, ?, ?, NULL, ?, ?, NULL, 'active', ?, NULL, 0, 1, NULL, 1, 2, NULL, 'dirty', 3);`,
-      "path_all_tables_1",
+      `INSERT INTO trail_days (
+        id, user_id, local_date, status, anchor_path_id, closed_at, reopened_at, close_summary,
+        tomorrow_first_step, character_result, planned_mark_count, completed_mark_count,
+        skipped_mark_count, memory_count, created_at, updated_at, deleted_at, sync_status, local_revision
+      ) VALUES (?, ?, ?, 'open', NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 1, 2, NULL, 'dirty', 3);`,
+      "trail_day_activity_1",
       "user_1",
-      "All Tables Path",
-      "all-tables-path",
-      "All Tables Path",
-      "green",
+      "2026-08-07",
     );
 
     const first = await enqueueAllWaymarkTablesForTursoUpload({
@@ -110,21 +117,21 @@ async function run() {
       now: 20,
     });
     const pending = await listPendingSyncOutboxRows(harness.db as any, { vaultId: "vault_1", limit: 1000 });
-    const pathOutbox = await harness.db.getFirstAsync<SyncOutboxRow>(
-      "SELECT * FROM sync_outbox WHERE entity_type = 'path' AND entity_id = ? LIMIT 1;",
-      "path_all_tables_1",
+    const trailDayOutbox = await harness.db.getFirstAsync<SyncOutboxRow>(
+      "SELECT * FROM sync_outbox WHERE entity_type = 'trail_day' AND entity_id = ? LIMIT 1;",
+      "trail_day_activity_1",
     );
-    const payload = JSON.parse(pathOutbox?.payload_json ?? "{}") as Record<string, unknown>;
+    const payload = JSON.parse(trailDayOutbox?.payload_json ?? "{}") as Record<string, unknown>;
 
     assert.equal(first.scanned, 1);
     assert.equal(first.enqueued, 1);
     assert.equal(second.scanned, 1);
     assert.equal(second.enqueued, 1);
     assert.equal(pending.length, 1);
-    assert.equal(pathOutbox?.local_revision, 3);
-    assert.equal(payload.id, "path_all_tables_1");
-    assert.equal(payload.name, "All Tables Path");
-    assert.equal(payload.__waymark_table, "paths");
+    assert.equal(trailDayOutbox?.local_revision, 3);
+    assert.equal(payload.id, "trail_day_activity_1");
+    assert.equal(payload.local_date, "2026-08-07");
+    assert.equal(payload.__waymark_table, "trail_days");
   } finally {
     harness.close();
   }

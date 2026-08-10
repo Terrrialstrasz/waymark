@@ -196,6 +196,62 @@ const workoutPlans: Record<
       },
     ],
   },
+  bodyweight_rep_progress: {
+    dayLabel: { en: "Home Workout", vi: "Home Workout" },
+    sessionTitle: { en: "Home Workout", vi: "Home Workout" },
+    totalDurationLabel: { en: "40 min", vi: "40 phut" },
+    exercises: [
+      {
+        id: "bodyweight-push-up",
+        order: 1,
+        title: { en: "Push-up", vi: "Push-up" },
+        mode: "reps_only",
+        setCount: 1,
+        targetReps: 10,
+      },
+      {
+        id: "bodyweight-side-plank-rotation-left",
+        order: 2,
+        title: { en: "Side Plank Rotation — Left", vi: "Side Plank Rotation — Left" },
+        mode: "reps_only",
+        setCount: 1,
+        targetReps: 5,
+      },
+      {
+        id: "bodyweight-side-plank-rotation-right",
+        order: 3,
+        title: { en: "Side Plank Rotation — Right", vi: "Side Plank Rotation — Right" },
+        mode: "reps_only",
+        setCount: 1,
+        targetReps: 5,
+      },
+      {
+        id: "bodyweight-plank",
+        order: 4,
+        title: { en: "Plank", vi: "Plank" },
+        mode: "timed",
+        setCount: 1,
+        targetReps: 1,
+        timedSeconds: 50,
+      },
+      {
+        id: "bodyweight-burpee",
+        order: 5,
+        title: { en: "Burpee", vi: "Burpee" },
+        mode: "reps_only",
+        setCount: 1,
+        targetReps: 10,
+      },
+      {
+        id: "bodyweight-inverted-row",
+        order: 6,
+        title: { en: "Inverted Row", vi: "Inverted Row" },
+        mode: "reps_only",
+        setCount: 1,
+        targetReps: 12,
+      },
+    ],
+  },
 };
 
 function localizedCount(locale: Locale, count: number, nounEn: string, nounVi: string) {

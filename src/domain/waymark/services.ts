@@ -84,6 +84,8 @@ export interface SubstituteMarkInstanceInput {
   substituteTitle: string;
   substituteDescription?: string;
   substitutePathId?: EntityId;
+  substituteExpeditionId?: EntityId | null;
+  substituteMilestoneId?: EntityId | null;
   substituteTrailDayId?: EntityId;
   substituteLocalDate?: LocalDateString;
   substituteScheduledStartAt?: ISODateTimeString;
@@ -557,6 +559,7 @@ export interface WorkoutCycleStep {
 
 export interface StartWorkoutSessionInput {
   markInstanceId: EntityId;
+  routineTemplateId?: EntityId;
   startedAt?: ISODateTimeString;
 }
 

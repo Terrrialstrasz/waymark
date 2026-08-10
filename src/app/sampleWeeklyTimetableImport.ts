@@ -154,6 +154,7 @@ export async function importSampleWeeklyTimetable20260601To0607(
     weekEndDate: "2026-06-07",
     note: "Imported from cleaned final timetable 2026-06-01 to 2026-06-07.",
     importBatchId: "weekly_timetable_2026_06_01_2026_06_07_clean",
+    allowTitleRefs: true,
     items: SAMPLE_WEEKLY_TIMETABLE_2026_06_01_TO_06_07,
   });
 }

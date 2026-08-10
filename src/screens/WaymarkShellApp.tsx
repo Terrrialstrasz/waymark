@@ -12,6 +12,7 @@ import { MemoryDetailTemplate as MemoryDetailScreen } from "../components/memory
 import { PackCheckTemplate } from "../components/pack-check";
 import { PathDetailTemplate } from "../components/paths/PathDetailTemplate";
 import { WeeklyMilestonesTemplate } from "../components/paths/WeeklyMilestonesTemplate";
+import type { WeeklyMilestoneItem, WeeklyMilestoneMarkItem } from "../components/paths/types";
 import { BottomNavBar } from "../components/primitives/BottomNavBar";
 import { WMChip } from "../components/primitives/WMChip";
 import { FieldJournalScreenShell } from "../components/primitives/FieldJournalScreenShell";
@@ -20,22 +21,30 @@ import { WMEmptyState } from "../components/primitives/WMEmptyState";
 import { WMText } from "../components/primitives/Text";
 import { SignalModeCard, type SignalModeCardModel, type SignalModeIntentPayload, useSignalModeController } from "../components/signal";
 import { StrengthSessionTemplate, type StrengthSessionDebugAction } from "../components/health/strength/StrengthSessionTemplate";
+import { WorkoutSessionReviewTemplate } from "../components/health/strength/WorkoutSessionReviewTemplate";
 import { TodayCockpitScreen } from "../components/today/TodayCockpitScreen";
 import { TodayMarkActionSheet } from "../components/today/TodayMarkActionSheet";
-import type { TodayMarkItem, TodayPackCheckItem } from "../components/today/__fixtures__/todayCarousel.fixtures";
+import type { TodayMarkItem, TodayMarkLaunchConfig, TodayMarkStatus, TodayPackCheckItem } from "../components/today/__fixtures__/todayCarousel.fixtures";
 import { getActiveExercise, getCurrentSet, getNextExercise, getNextSet } from "../components/health/strength/utils";
 import { getStrengthSessionPrimaryAction } from "../components/health/strength/getStrengthSessionPrimaryAction";
-import { WeeklyDetailTemplate } from "../components/weekly-coding/WeeklyDetailTemplate";
-import { WeeklyCodingReportTemplate } from "../components/weekly-coding/WeeklyCodingReportTemplate";
 import { WeeklySignalReviewTemplate } from "../components/weekly-timetable/WeeklySignalReviewTemplate";
 import { WeeklyTimetableReviewTemplate } from "../components/weekly-timetable/WeeklyTimetableReviewTemplate";
 import { MeOverviewTemplate } from "./me/MeOverviewTemplate";
 import { getCopy } from "../i18n/copy";
-import type { MoveMarkValue, QuickSubstituteValue } from "../components/planned-mark/PlannedMarkActionSheetContent";
+import type {
+  ExpeditionOption,
+  MilestoneOption,
+  MoveMarkValue,
+  PathOption,
+  PlannedMarkActionValue,
+  QuickSubstituteValue,
+} from "../components/planned-mark/PlannedMarkActionSheetContent";
 import {
   clearWaymarkSignalsAsync,
+  clearLocalProgressMapForTursoPull,
   exportWaymarkDatabaseAsync,
   getWaymarkSignalAlarmHealth,
+  importGolfProgramDevMarks,
   importWeeklyTimetable20260608To0614,
   importWeeklyTimetable20260615To0621,
   importWeeklyTimetable20260622To0628,
@@ -67,12 +76,16 @@ import {
   useWaymarkPackCheckDetail,
   useWaymarkPathDetail,
   useWaymarkStrengthSession,
+  useWaymarkWorkoutReview,
   useWaymarkToday,
   useWaymarkTursoDevSync,
+  useWaymarkDayReview,
   useWaymarkWeeklyMilestones,
   useWaymarkWeeklyCoding,
 } from "../app";
-import { formatLocalDate, mapUiPathId } from "../app/waymarkUi";
+import { formatLocalDate, mapUiPathId, shiftLocalDate } from "../app/waymarkUi";
+import { getWaymarkAppVariant } from "../app/googleDriveMediaConfig";
+import { buildGolfPracticeLaunchConfig, buildHealthWorkoutLaunchConfig } from "../app/todayDataLoader";
 import {
   WAYMARK_SIGNAL_ACTION_COMPLETE,
   WAYMARK_SIGNAL_ACTION_DISMISS,
@@ -84,10 +97,11 @@ import {
   getLastWaymarkNotificationResponseAsync,
   readWaymarkSignalNotificationData,
 } from "../app/waymarkNotifications";
-import type { Signal } from "../domain/waymark/entities";
+import type { MarkInstance, MarkInstanceDetail, Signal } from "../domain/waymark/entities";
 import {
   MarkInstanceOrigin,
   MarkInstanceStatus,
+  MilestoneStatus,
   SignalStatus,
   SignalTargetType,
   WorkoutSessionStatus,
@@ -95,8 +109,11 @@ import {
 import { advanceStrengthSession, tickStrengthSession, updateStrengthSetActualLoad } from "../lib/waymark/strengthSessionExecution";
 import { saveGolfPracticeLog } from "../lib/waymark/golfPractice";
 import { buildGolfShortGamePracticePlanForMarkTitle, resolveGolfPracticeWorkoutTypeForMarkTitle } from "../lib/waymark/golfPracticeMark";
+import { buildGolfProgramPracticePlanForTitle } from "../config/golfProgramCatalog";
 import { deleteMarkDetail, loadStrengthSessionReadModel } from "../lib/waymark/shellAppAdapters";
-import { setMarkMetadata, type MarkResolutionKind } from "../lib/waymark";
+import { isMarkFinalStatus, setMarkMetadata, type MarkResolutionKind } from "../lib/waymark";
+import { getMarkMetadata } from "../lib/waymark/markMetadataStore";
+import { getMarkTemplateSeedMetadata } from "../lib/waymark/markTemplateSeedStore";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
 import { createSignalOrchestrator, type SignalPrimaryResolutionInput, type SignalSkipResolutionInput } from "../lib/waymark/signalOrchestrator";
 import { colors, foundationColors, spacing } from "../theme/tokens";
@@ -105,7 +122,21 @@ import type { SaveGolfPracticeLogInput } from "../types/golfPractice";
 import type { BottomTabId, Locale, PathId } from "../types/ui";
 import type { CaptureMediaAttachment } from "../types/capture";
 
-const ENABLE_PREVIEW_ME_TOOLS = __DEV__ || process.env.EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS === "true";
+const ENABLE_PREVIEW_ME_TOOLS =
+  getWaymarkAppVariant() === "dev" &&
+  (__DEV__ || process.env.EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS === "true");
+
+type SubstituteHierarchyOptions = {
+  pathOptions: PathOption[];
+  expeditionOptions: ExpeditionOption[];
+  milestoneOptions: MilestoneOption[];
+};
+
+const EMPTY_SUBSTITUTE_HIERARCHY_OPTIONS: SubstituteHierarchyOptions = {
+  pathOptions: [],
+  expeditionOptions: [],
+  milestoneOptions: [],
+};
 
 const DEV_CHIPPING_TEST_MARKS = [
   {
@@ -166,7 +197,20 @@ const DEV_CHIPPING_TEST_MARKS = [
   },
 ] as const;
 
-type DetailSourceType = "mark_instance" | "memory" | "backlog_item" | "week_plan_item" | "pack_check_instance";
+type DetailSourceType = "mark_instance" | "memory" | "backlog_item" | "pack_check_instance";
+
+type WeeklySessionReviewLaunch = {
+  kind: "strength_session" | "golf_practice";
+  markTitle: string;
+  routineTemplateId?: string;
+  workoutType?: "putting" | "swing";
+};
+
+type WeeklySessionReviewResolution = {
+  launch: WeeklySessionReviewLaunch;
+  interactionKind: "strength_session" | "golf_practice";
+  launchConfig?: TodayMarkLaunchConfig;
+};
 
 type AppRoute =
   | { kind: "today" }
@@ -176,14 +220,14 @@ type AppRoute =
   | { kind: "me" }
   | { kind: "closeTrail"; trailDayId?: string }
   | { kind: "pathDetail"; pathId: PathId }
-  | { kind: "golfPractice"; parentTab: Exclude<BottomTabId, "capture">; markId?: string; markTitle?: string; workoutType?: "putting" | "swing" }
-  | { kind: "detail"; sourceType: DetailSourceType; sourceId: string; parentTab: Exclude<BottomTabId, "capture"> }
+  | { kind: "golfPractice"; parentTab: Exclude<BottomTabId, "capture">; markId?: string; markTitle?: string; routineTemplateId?: string; workoutType?: "putting" | "swing"; mode?: "execution" | "review" }
+  | { kind: "workoutReview"; parentTab: Exclude<BottomTabId, "capture">; markId: string; routineTemplateId?: string }
+  | { kind: "detail"; sourceType: DetailSourceType; sourceId: string; parentTab: Exclude<BottomTabId, "capture">; sessionReview?: WeeklySessionReviewLaunch }
   | { kind: "signal"; signalId: string; parentTab: Exclude<BottomTabId, "capture"> }
   | { kind: "strengthSession"; markId: string; parentTab: Exclude<BottomTabId, "capture"> }
   | { kind: "packCheck"; packId: string }
   | { kind: "expeditionDetail"; expeditionId: string; parentTab: Exclude<BottomTabId, "capture"> }
   | { kind: "backlog" }
-  | { kind: "weeklyCoding" }
   | { kind: "weeklyTimetable" }
   | { kind: "weeklySignal" };
 
@@ -280,7 +324,6 @@ function buildPackCheckViewModel(pack: TodayPackCheckItem): { name: string; path
 function buildMeHubItems(
   locale: Locale,
   openBacklog: () => void,
-  openWeeklyCoding: () => void,
   openWeeklyTimetable: () => void,
   openWeeklySignal: () => void,
   openCloseTrail: () => void,
@@ -312,15 +355,6 @@ function buildMeHubItems(
       onPress: openWeeklySignal,
     },
     {
-      id: "weekly-coding",
-      title: c.weeklyCodingHub.title,
-      subtitle: c.weeklyCodingHub.subtitle,
-      helperText: c.weeklyCodingHub.helperText,
-      icon: "entity.mark" as const,
-      tone: "green" as const,
-      onPress: openWeeklyCoding,
-    },
-    {
       id: "backlog",
       title: c.backlogHub.title,
       subtitle: c.backlogHub.subtitle,
@@ -350,13 +384,13 @@ function routeToTab(route: AppRoute): Exclude<BottomTabId, "capture"> {
       return "paths";
     case "me":
     case "backlog":
-    case "weeklyCoding":
     case "weeklyTimetable":
     case "weeklySignal":
       return "me";
     case "detail":
     case "signal":
     case "strengthSession":
+    case "workoutReview":
     case "expeditionDetail":
       return route.parentTab;
     case "packCheck":
@@ -514,9 +548,16 @@ export function WaymarkShellApp() {
   const [locale, setLocale] = useState<Locale>("en");
   const app = useWaymarkApp();
   const [selectedPathId, setSelectedPathId] = useState<PathId>("family");
-  const [weeklyMilestonesPathId, setWeeklyMilestonesPathId] = useState<"all" | PathId>("all");
   const [routeStack, setRouteStack] = useState<AppRoute[]>([{ kind: "today" }]);
   const [selectedTodayMark, setSelectedTodayMark] = useState<TodayMarkItem | null>(null);
+  const [selectedWeeklyMark, setSelectedWeeklyMark] = useState<TodayMarkItem | null>(null);
+  const [selectedWeeklyMarkActionMode, setSelectedWeeklyMarkActionMode] = useState<"execution" | "review">("execution");
+  const [selectedWeeklyTimetableDayDate, setSelectedWeeklyTimetableDayDate] = useState(() =>
+    formatLocalDate(new Date(), app.user.timezone),
+  );
+  const [substituteHierarchyOptions, setSubstituteHierarchyOptions] = useState<SubstituteHierarchyOptions>(
+    EMPTY_SUBSTITUTE_HIERARCHY_OPTIONS,
+  );
   const [startingStrengthMarkId, setStartingStrengthMarkId] = useState<string | null>(null);
   const handledNotificationResponseRef = useRef<string | null>(null);
   const handledDeepLinkUrlRef = useRef<string | null>(null);
@@ -530,16 +571,15 @@ export function WaymarkShellApp() {
   const shouldLoadJournal = activeTab === "journal" || route.kind === "dailyJournal";
   const shouldLoadBacklog = route.kind === "backlog" || detailRoute?.sourceType === "backlog_item";
   const shouldLoadWeekly =
-    route.kind === "weeklyCoding" ||
     route.kind === "weeklyTimetable" ||
-    route.kind === "weeklySignal" ||
-    detailRoute?.sourceType === "week_plan_item";
+    route.kind === "weeklySignal";
   const shouldLoadCloseTrail = route.kind === "closeTrail";
   const shouldLoadToday = activeTab === "today" || route.kind === "signal" || shouldLoadCloseTrail;
-  const shouldLoadWeeklyMilestones = route.kind === "paths";
+  const shouldLoadWeeklyMilestones = route.kind === "paths" || route.kind === "weeklyTimetable";
 
   const googleDriveDevUpload = useGoogleDriveDevUpload(locale);
   const tursoDevSync = useWaymarkTursoDevSync(locale);
+  const [confirmingDailyPlan, setConfirmingDailyPlan] = useState(false);
   const [tursoLinkModalOpen, setTursoLinkModalOpen] = useState(false);
   const [tursoLinkUrl, setTursoLinkUrl] = useState("");
   const [tursoLinkToken, setTursoLinkToken] = useState("");
@@ -550,8 +590,54 @@ export function WaymarkShellApp() {
   const weekly = useWaymarkWeeklyCoding(locale, { enabled: shouldLoadWeekly });
   const weeklyMilestones = useWaymarkWeeklyMilestones(locale, {
     enabled: shouldLoadWeeklyMilestones,
-    selectedPathId: weeklyMilestonesPathId,
+    weekStartDate: route.kind === "weeklyTimetable" ? weekly.selectedWeekStart : undefined,
   });
+  const previousWeeklyTimetableWeekStartRef = useRef(weekly.selectedWeekStart);
+
+  useEffect(() => {
+    const previousWeekStart = previousWeeklyTimetableWeekStartRef.current;
+    previousWeeklyTimetableWeekStartRef.current = weekly.selectedWeekStart;
+
+    if (route.kind !== "weeklyTimetable") {
+      return;
+    }
+
+    setSelectedWeeklyTimetableDayDate((current) => {
+      const weekStart = weekly.selectedWeekStart;
+      const weekEnd = shiftLocalDate(weekStart, 6);
+      if (current >= weekStart && current <= weekEnd) {
+        return current;
+      }
+
+      const today = formatLocalDate(new Date(), app.user.timezone);
+      if (today >= weekStart && today <= weekEnd) {
+        return today;
+      }
+
+      const offset = clampDayOffset(getLocalDateDiff(current, previousWeekStart));
+      return shiftLocalDate(weekStart, offset);
+    });
+  }, [app.user.timezone, route.kind, weekly.selectedWeekStart]);
+
+  const dayReview = useWaymarkDayReview(locale, {
+    enabled: route.kind === "weeklyTimetable",
+    localDate: route.kind === "weeklyTimetable" ? selectedWeeklyTimetableDayDate : null,
+  });
+  const weeklyTimetableDayNavigatorDays = useMemo(() => {
+    const today = formatLocalDate(new Date(), app.user.timezone);
+    return buildWeeklyTimetableDayNavigatorDays(
+      weekly.selectedWeekStart,
+      locale,
+      today,
+      weekly.reviewDays,
+      dayReview.localDate,
+      dayReview.marks.length,
+    );
+  }, [app.user.timezone, dayReview.localDate, dayReview.marks.length, locale, weekly.reviewDays, weekly.selectedWeekStart]);
+  const selectedWeeklyTimetableDayLabel = useMemo(
+    () => formatWeeklyTimetableDayLabel(selectedWeeklyTimetableDayDate, locale),
+    [locale, selectedWeeklyTimetableDayDate],
+  );
 
   const liveTodayData = liveToday.status === "ready" ? liveToday.data : null;
   const activeSignalRouteId = route.kind === "signal" ? route.signalId : null;
@@ -580,6 +666,11 @@ export function WaymarkShellApp() {
         : signalRoutePackCheckId;
   const packCheckDetail = useWaymarkPackCheckDetail(locale, packCheckDetailId);
   const strengthSession = useWaymarkStrengthSession(locale, route.kind === "strengthSession" ? route.markId : null);
+  const workoutReview = useWaymarkWorkoutReview(
+    locale,
+    route.kind === "workoutReview" ? route.markId : null,
+    route.kind === "workoutReview" ? route.routineTemplateId : undefined,
+  );
   const closeTrailTrailDayId =
     route.kind === "closeTrail"
       ? route.trailDayId ?? liveTodayData?.trailDayId ?? null
@@ -606,6 +697,39 @@ export function WaymarkShellApp() {
     void journal.loadDailyJournal(dailyJournalRouteDayKey);
   }, [dailyJournalRouteDayKey, journal.loadDailyJournal, journal.status]);
   const resolvedStrengthSession = strengthSessionDraft ?? strengthReadModel?.uiSession ?? null;
+
+  async function loadSubstituteHierarchyOptions(): Promise<SubstituteHierarchyOptions> {
+    const paths = await app.repositories.paths.listActivePaths(app.user.id);
+    const pathOptions: PathOption[] = paths.map((path) => ({
+      id: path.id,
+      label: path.title,
+    }));
+    const expeditionOptions: ExpeditionOption[] = [];
+    const milestoneOptions: MilestoneOption[] = [];
+
+    for (const path of paths) {
+      const expeditions = await app.repositories.expeditions.listExpeditionsByPath(path.id);
+      for (const expedition of expeditions.items) {
+        expeditionOptions.push({
+          id: expedition.id,
+          label: expedition.title,
+          pathId: path.id,
+        });
+
+        const milestones = await app.repositories.expeditions.listMilestonesByExpedition(expedition.id);
+        for (const milestone of milestones) {
+          milestoneOptions.push({
+            id: milestone.id,
+            label: milestone.title,
+            expeditionId: expedition.id,
+            pathId: path.id,
+          });
+        }
+      }
+    }
+
+    return { pathOptions, expeditionOptions, milestoneOptions };
+  }
 
   useEffect(() => {
     if (route.kind !== "signal") {
@@ -646,6 +770,40 @@ export function WaymarkShellApp() {
       setSelectedTodayMark(null);
     }
   }, [route.kind, selectedTodayMark]);
+
+  useEffect(() => {
+    if (!isContextMarkActionSheetRoute(route.kind) && selectedWeeklyMark) {
+      setSelectedWeeklyMark(null);
+      setSelectedWeeklyMarkActionMode("execution");
+    }
+  }, [route.kind, selectedWeeklyMark]);
+
+  useEffect(() => {
+    const selectedMark = selectedTodayMark ?? selectedWeeklyMark;
+    if (!selectedMark) {
+      setSubstituteHierarchyOptions(EMPTY_SUBSTITUTE_HIERARCHY_OPTIONS);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const options = await loadSubstituteHierarchyOptions();
+        if (!cancelled) {
+          setSubstituteHierarchyOptions(options);
+        }
+      } catch (error) {
+        console.warn("[WaymarkSubstitute] Failed to load substitute hierarchy options.", error);
+        if (!cancelled) {
+          setSubstituteHierarchyOptions(EMPTY_SUBSTITUTE_HIERARCHY_OPTIONS);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTodayMark, selectedWeeklyMark]);
 
   useEffect(() => {
     if (route.kind !== "signal" || signalRouteSignal?.targetType !== SignalTargetType.MarkInstance) {
@@ -837,9 +995,15 @@ export function WaymarkShellApp() {
     if (shouldLoadWeekly) {
       weekly.refresh();
     }
+    if (route.kind === "weeklyTimetable") {
+      dayReview.refresh();
+    }
     if (shouldLoadJournal) {
       journal.refresh();
     }
+    weeklyMilestones.refresh();
+    pathDetail.refresh();
+    expeditionDetail.refresh();
   };
 
   const handleImportSampleWeeklyTimetable = () => {
@@ -1273,6 +1437,27 @@ export function WaymarkShellApp() {
     setTursoLinkModalOpen(true);
   };
 
+  const handleImportGolfProgramDevMarks = () => {
+    void (async () => {
+      try {
+        const report = await importGolfProgramDevMarks(app, app.user.id);
+        refreshLoadedShellData();
+        Alert.alert(
+          locale === "vi" ? "Da import Golf Program dev marks" : "Golf Program dev marks imported",
+          locale === "vi"
+            ? `Da tao/cap nhat ${report.results.length} marks test Golf Program: ${report.importedTitles.join(", ")}.`
+            : `Created/updated ${report.results.length} Golf Program test marks: ${report.importedTitles.join(", ")}.`,
+        );
+      } catch (error) {
+        console.error("[GolfProgramDevImport] Import failed", error);
+        Alert.alert(
+          locale === "vi" ? "Khong import duoc Golf Program dev marks" : "Unable to import Golf Program dev marks",
+          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
+        );
+      }
+    })();
+  };
+
   const handleSubmitTursoLink = () => {
     void (async () => {
       const linked = await tursoDevSync.linkTurso({
@@ -1325,103 +1510,17 @@ export function WaymarkShellApp() {
 
   const handleTursoManualUpload = () => {
     void (async () => {
-      const result = await tursoDevSync.runManualUpload();
+      const result = await tursoDevSync.runEodUpload();
       Alert.alert(
-        locale === "vi" ? "Turso manual upload" : "Turso manual upload",
+        locale === "vi" ? "Turso EOD Full-DB" : "Turso EOD Full-DB",
         tursoDevSync.lastMessage ??
           (result
             ? locale === "vi"
-              ? `Da day ${result.uploaded.length}/${result.attempted}, loi ${result.failed.length}.`
-              : `Uploaded ${result.uploaded.length}/${result.attempted}, failed ${result.failed.length}.`
+              ? `Da day ${result.uploaded}/${result.attempted} mutation, ${result.duplicates} trung lap, ${result.rejected} bi tu choi, ${result.failed.length} loi.`
+              : `Uploaded ${result.uploaded}/${result.attempted} mutations, ${result.duplicates} duplicates, ${result.rejected} rejected, ${result.failed.length} failed.`
             : locale === "vi"
               ? "Khong chay duoc Turso upload."
               : "Turso upload did not run."),
-      );
-    })();
-  };
-
-  const handleTursoUploadAllTables = () => {
-    Alert.alert(
-      locale === "vi" ? "Upload tat ca bang len Turso?" : "Upload all tables to Turso?",
-      locale === "vi"
-        ? "Waymark se snapshot cac bang canonical local vao outbox roi upload batch len Turso. Local SQLite van la SSOT."
-        : "Waymark will snapshot local canonical tables into the outbox, then upload them to Turso in batches. Local SQLite remains the SSOT.",
-      [
-        { text: locale === "vi" ? "Huy" : "Cancel", style: "cancel" },
-        {
-          text: locale === "vi" ? "Upload all" : "Upload all",
-          onPress: () => {
-            void (async () => {
-              const result = await tursoDevSync.uploadAllTables();
-              Alert.alert(
-                locale === "vi" ? "Upload all tables" : "Upload all tables",
-                result
-                  ? locale === "vi"
-                    ? `Scan ${result.scanned} rows, outbox moi ${result.enqueued}, uploaded ${result.uploaded}/${result.attempted}, loi ${result.failed}, batches ${result.batches}.`
-                    : `Scanned ${result.scanned} rows, new outbox ${result.enqueued}, uploaded ${result.uploaded}/${result.attempted}, failed ${result.failed}, batches ${result.batches}.`
-                  : tursoDevSync.lastMessage ?? (locale === "vi" ? "Khong upload duoc all tables." : "Unable to upload all tables."),
-              );
-            })();
-          },
-        },
-      ],
-    );
-  };
-
-  const handleTursoUploadTypedWeekPlans = () => {
-    void (async () => {
-      const result = await tursoDevSync.uploadTypedWeekPlans();
-      Alert.alert(
-        locale === "vi" ? "Upload typed week_plans" : "Upload typed week_plans",
-        result
-          ? locale === "vi"
-            ? `Scanned ${result.scanned}, uploaded ${result.uploaded}, duplicate ${result.duplicates}, loi ${result.failed}.`
-            : `Scanned ${result.scanned}, uploaded ${result.uploaded}, duplicates ${result.duplicates}, failed ${result.failed}.`
-          : tursoDevSync.lastMessage ?? (locale === "vi" ? "Khong upload duoc typed week_plans." : "Unable to upload typed week_plans."),
-      );
-    })();
-  };
-
-  const handleTursoUploadTypedWeekPlanItems = () => {
-    void (async () => {
-      const result = await tursoDevSync.uploadTypedWeekPlanItems();
-      Alert.alert(
-        locale === "vi" ? "Upload typed week_plan_items" : "Upload typed week_plan_items",
-        result
-          ? locale === "vi"
-            ? `Scanned ${result.scanned}, uploaded ${result.uploaded}, duplicate ${result.duplicates}, loi ${result.failed}.`
-            : `Scanned ${result.scanned}, uploaded ${result.uploaded}, duplicates ${result.duplicates}, failed ${result.failed}.`
-          : tursoDevSync.lastMessage ??
-              (locale === "vi" ? "Khong upload duoc typed week_plan_items." : "Unable to upload typed week_plan_items."),
-      );
-    })();
-  };
-
-  const handleTursoUploadHierarchyProjection = () => {
-    void (async () => {
-      const result = await tursoDevSync.uploadHierarchyProjection();
-      Alert.alert(
-        locale === "vi" ? "Upload typed hierarchy" : "Upload typed hierarchy",
-        result
-          ? locale === "vi"
-            ? `Scanned ${result.scanned}, uploaded ${result.uploaded}, duplicate ${result.duplicates}, loi ${result.failed}.`
-            : `Scanned ${result.scanned}, uploaded ${result.uploaded}, duplicates ${result.duplicates}, failed ${result.failed}.`
-          : tursoDevSync.lastMessage ??
-              (locale === "vi" ? "Khong upload duoc typed hierarchy." : "Unable to upload typed hierarchy."),
-      );
-    })();
-  };
-
-  const handleTursoEodUpload = () => {
-    void (async () => {
-      const result = await tursoDevSync.runEodUpload();
-      Alert.alert(
-        locale === "vi" ? "Turso EOD upload" : "Turso EOD upload",
-        result
-          ? locale === "vi"
-            ? `Da day ${result.uploaded.length}/${result.attempted}, loi ${result.failed.length}.`
-            : `Uploaded ${result.uploaded.length}/${result.attempted}, failed ${result.failed.length}.`
-          : tursoDevSync.lastMessage ?? (locale === "vi" ? "Khong chay duoc Turso EOD upload." : "Turso EOD upload did not run."),
       );
     })();
   };
@@ -1430,57 +1529,90 @@ export function WaymarkShellApp() {
     void (async () => {
       const result = await tursoDevSync.pullRemoteEdits();
       refreshLoadedShellData();
+      const message = tursoDevSync.getLastMessage();
       Alert.alert(
-        locale === "vi" ? "Turso pull remote edits" : "Turso pull remote edits",
+        locale === "vi" ? "Turso Full-DB pull" : "Turso Full-DB pull",
         result
-          ? locale === "vi"
-            ? `Da keo ${result.changes.length} changes tu week_plans, week_plan_items va signals.`
-            : `Pulled ${result.changes.length} changes from week_plans, week_plan_items, and signals.`
-          : tursoDevSync.lastMessage ?? (locale === "vi" ? "Khong pull duoc Turso edits." : "Unable to pull Turso edits."),
+          ? message ?? (locale === "vi" ? "Full-DB pull va reconciliation da hoan tat." : "Full-DB pull and reconciliation completed.")
+          : message ?? (locale === "vi" ? "Khong pull duoc Turso edits." : "Unable to pull Turso edits."),
       );
     })();
   };
 
-  const handleTursoPullTypedWeekPlans = () => {
+  const handleTursoPullMarks = () => {
     void (async () => {
-      const result = await tursoDevSync.pullTypedWeekPlans();
+      const result = await tursoDevSync.pullAllMarkInstances();
       refreshLoadedShellData();
+      const message = tursoDevSync.getLastMessage();
       Alert.alert(
-        locale === "vi" ? "Pull typed planning" : "Pull typed planning",
+        locale === "vi" ? "Pull all Marks" : "Pull all Marks",
         result
           ? locale === "vi"
-            ? `Fetched ${result.fetched}, applied ${result.applied}, skipped ${result.skipped}, cursor ${result.fromChangeSequence}->${result.throughChangeSequence}.`
-            : `Fetched ${result.fetched}, applied ${result.applied}, skipped ${result.skipped}, cursor ${result.fromChangeSequence}->${result.throughChangeSequence}.`
-          : tursoDevSync.lastMessage ?? (locale === "vi" ? "Khong pull duoc typed planning." : "Unable to pull typed planning."),
+            ? `Fetched ${result.fetched}, inserted ${result.inserted}, updated ${result.updated}, skipped ${result.skipped}, conflicts ${result.conflicts}, trail days ${result.affectedTrailDays}.`
+            : `Fetched ${result.fetched}, inserted ${result.inserted}, updated ${result.updated}, skipped ${result.skipped}, conflicts ${result.conflicts}, trail days ${result.affectedTrailDays}.`
+          : message ?? (locale === "vi" ? "Khong pull duoc Marks." : "Unable to pull Marks."),
       );
     })();
   };
 
-  const handleClearTursoDevPushes = () => {
+  const handleTursoPullTrailDays = () => {
+    void (async () => {
+      const result = await tursoDevSync.pullAllTrailDays();
+      refreshLoadedShellData();
+      const message = tursoDevSync.getLastMessage();
+      Alert.alert(
+        "Pull all Trail Days",
+        result
+          ? `Fetched ${result.fetched}, inserted ${result.inserted}, updated ${result.updated}, skipped ${result.skipped}, conflicts ${result.conflicts}.`
+          : message ?? (locale === "vi" ? "Khong pull duoc Trail Days." : "Unable to pull Trail Days."),
+      );
+    })();
+  };
+
+  const handleTursoPullHierarchyProjection = () => {
+    void (async () => {
+      const result = await tursoDevSync.pullHierarchyProjection();
+      refreshLoadedShellData();
+      const message = tursoDevSync.getLastMessage();
+      Alert.alert(
+        locale === "vi" ? "Pull hierarchy planning" : "Pull hierarchy planning",
+        result
+          ? locale === "vi"
+            ? `Paths ${result.byEntityType.path}, expeditions ${result.byEntityType.expedition}, milestones ${result.byEntityType.milestone}. Fetched ${result.fetched}, applied ${result.applied}, cursor ${result.fromChangeSequence}->${result.throughChangeSequence}.`
+            : `Paths ${result.byEntityType.path}, expeditions ${result.byEntityType.expedition}, milestones ${result.byEntityType.milestone}. Fetched ${result.fetched}, applied ${result.applied}, cursor ${result.fromChangeSequence}->${result.throughChangeSequence}.`
+          : message ?? (locale === "vi" ? "Khong pull duoc hierarchy planning." : "Unable to pull hierarchy planning."),
+      );
+    })();
+  };
+
+  const handleClearLocalProgressMapForTursoPull = () => {
     Alert.alert(
-      locale === "vi" ? "Xoa data dev tren Turso?" : "Clear dev data on Turso?",
+      locale === "vi" ? "Xoa local Expedition/Milestone/Mark?" : "Clear local Expedition/Milestone/Mark?",
       locale === "vi"
-        ? "Thao tac nay chi xoa remote records/idempotency/change log cua cac outbox rows do device hien tai da day len Turso. Local SQLite duoc giu nguyen."
-        : "This removes remote records/idempotency/change log for outbox rows pushed by this device. Local SQLite stays unchanged.",
+        ? "Dev only: hard-delete local expeditions, milestones, marks va cac row phu dang tham chieu mark. Turso khong bi xoa. Hay upload/export truoc neu can backup."
+        : "Dev only: hard-delete local expeditions, milestones, marks, and child rows that reference marks. Turso is not touched. Export/upload first if you need a backup.",
       [
+        { text: locale === "vi" ? "Huy" : "Cancel", style: "cancel" },
         {
-          text: locale === "vi" ? "Huy" : "Cancel",
-          style: "cancel",
-        },
-        {
-          text: locale === "vi" ? "Xoa remote dev data" : "Clear remote dev data",
+          text: locale === "vi" ? "Xoa local" : "Clear local",
           style: "destructive",
           onPress: () => {
             void (async () => {
-              const result = await tursoDevSync.clearDevRemotePushes();
-              Alert.alert(
-                locale === "vi" ? "Da xoa Turso dev data" : "Turso dev data cleared",
-                result
-                  ? locale === "vi"
-                    ? `Da xoa ${result.entityRecords} remote records va ${result.idempotencyKeys} idempotency keys.`
-                    : `Cleared ${result.entityRecords} remote records and ${result.idempotencyKeys} idempotency keys.`
-                  : tursoDevSync.lastMessage ?? (locale === "vi" ? "Khong xoa duoc Turso dev data." : "Unable to clear Turso dev data."),
-              );
+              try {
+                const report = await clearLocalProgressMapForTursoPull();
+                refreshLoadedShellData();
+                Alert.alert(
+                  locale === "vi" ? "Da xoa local progress map" : "Local progress map cleared",
+                  locale === "vi"
+                    ? `Deleted ${report.markInstances} marks, ${report.milestones} milestones, ${report.expeditions} expeditions. Cleared ${report.weekPlanItemsUpdated} weekly item links, ${report.dependentSettings} mark-dependent settings, ${report.syncOutboxRows} outbox rows, ${report.planningStateRows} planning state rows.`
+                    : `Deleted ${report.markInstances} marks, ${report.milestones} milestones, ${report.expeditions} expeditions. Cleared ${report.weekPlanItemsUpdated} weekly item links, ${report.dependentSettings} mark-dependent settings, ${report.syncOutboxRows} outbox rows, ${report.planningStateRows} planning state rows.`,
+                );
+              } catch (error) {
+                Alert.alert(
+                  locale === "vi" ? "Khong xoa duoc local progress map" : "Unable to clear local progress map",
+                  error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
+                );
+              }
             })();
           },
         },
@@ -2080,20 +2212,251 @@ export function WaymarkShellApp() {
     openDetail("backlog_item", itemId, parentTab);
   };
 
-  const openWeeklyDetail = (itemId: string, parentTab: Exclude<BottomTabId, "capture"> = "me") => {
-    openDetail("week_plan_item", itemId, parentTab);
-  };
-
   const openPackCheck = (pack: TodayPackCheckItem) => pushRoute({ kind: "packCheck", packId: pack.id });
   const openSignal = (signalId: string, parentTab: Exclude<BottomTabId, "capture"> = "today") =>
     pushRoute({ kind: "signal", signalId, parentTab });
   const openExpedition = (expeditionId: string, parentTab: Exclude<BottomTabId, "capture"> = "today") =>
     pushRoute({ kind: "expeditionDetail", expeditionId, parentTab });
+  const completeWeeklyMilestone = async (milestoneId: string) => {
+    await app.repositories.expeditions.updateMilestone(milestoneId, {
+      status: MilestoneStatus.Completed,
+      completedAt: new Date().toISOString(),
+    });
+    weeklyMilestones.refresh();
+  };
+  const skipWeeklyMilestone = async (milestoneId: string) => {
+    await app.repositories.expeditions.updateMilestone(milestoneId, {
+      status: MilestoneStatus.Archived,
+      completedAt: null,
+    });
+    weeklyMilestones.refresh();
+  };
+  const moveWeeklyMilestone = async (milestoneId: string) => {
+    const milestone = weeklyMilestones.allItems.find((item) => item.id === milestoneId);
+    const currentStartDate = milestone?.startDate;
+    const currentEndDate = milestone?.endDate ?? formatLocalDate(new Date(), app.user.timezone);
+    await app.repositories.expeditions.updateMilestone(milestoneId, {
+      status: MilestoneStatus.Active,
+      startDate: currentStartDate ? shiftLocalDate(currentStartDate, 7) : undefined,
+      targetDate: shiftLocalDate(currentEndDate, 7),
+      completedAt: null,
+    });
+    weeklyMilestones.refresh();
+  };
+  const openWeeklyMilestoneMark = (
+    milestone: WeeklyMilestoneItem,
+    mark: WeeklyMilestoneMarkItem,
+    parentTab: Exclude<BottomTabId, "capture"> = "paths",
+    entryContext: "default" | "weekly_timetable" = "default",
+  ) => {
+    void milestone;
+    void openMarkByStatus(mark.id, parentTab, "execution", entryContext);
+  };
+  const openDayReviewMark = (mark: TodayMarkItem) => {
+    void openMarkByStatus(mark.id, "me", "review", "weekly_timetable");
+  };
+  const openMarkByStatus = async (
+    markId: string,
+    parentTab: Exclude<BottomTabId, "capture"> = "paths",
+    actionMode: "execution" | "review" = "execution",
+    entryContext: "default" | "weekly_timetable" = "default",
+  ) => {
+    const mark = await app.repositories.marks.getMarkInstanceById(markId);
+    if (!mark) {
+      Alert.alert(
+        locale === "vi" ? "Khong tim thay mark" : "Mark unavailable",
+        locale === "vi" ? "Mark nay khong con ton tai trong local database." : "This mark no longer exists in the local database.",
+      );
+      return;
+    }
+
+    const sessionReview = entryContext === "weekly_timetable" ? await resolveWeeklySessionReview(mark) : null;
+
+    if (isMarkFinalStatus(mark.status)) {
+      if (sessionReview) {
+        pushRoute({ kind: "detail", sourceType: "mark_instance", sourceId: mark.id, parentTab, sessionReview: sessionReview.launch });
+      } else {
+        openMarkDetail(mark.id, parentTab);
+      }
+      return;
+    }
+
+    const path = await app.repositories.paths.getPathById(mark.pathId);
+    const expedition = mark.expeditionId ? await app.repositories.expeditions.getExpeditionById(mark.expeditionId) : null;
+    const milestone = expedition && mark.milestoneId
+      ? (await app.repositories.expeditions.listMilestonesByExpedition(expedition.id)).find((item) => item.id === mark.milestoneId)
+      : undefined;
+    const detail = await app.repositories.marks.getMarkInstanceDetail(mark.id);
+    const mapped = mapMarkInstanceToActionSheetItem(mark, detail, locale, { path, milestoneTitle: milestone?.title, expeditionTitle: expedition?.title });
+    if (sessionReview) {
+      mapped.interactionKind = sessionReview.interactionKind;
+      mapped.actionSheet = {
+        ...mapped.actionSheet,
+        launchConfig: sessionReview.launchConfig,
+        primaryActionLabel: {
+          en: sessionReview.interactionKind === "strength_session" ? "Review Workout" : "Review Golf Session",
+          vi: sessionReview.interactionKind === "strength_session" ? "Review Workout" : "Review Golf Session",
+        },
+        primaryActionHint: {
+          en: "Open a read-only session review. This does not count toward progress.",
+          vi: "Mo session chi de review. Session nay khong duoc tinh vao progress.",
+        },
+      };
+    }
+    setSelectedWeeklyMarkActionMode(actionMode);
+    setSelectedWeeklyMark(mapped);
+  };
+
+  const resolveWeeklySessionReview = async (mark: MarkInstance): Promise<WeeklySessionReviewResolution | null> => {
+    const [path, markMetadata, templateMetadata, existingSession] = await Promise.all([
+      app.repositories.paths.getPathById(mark.pathId),
+      getMarkMetadata(app.repositories.appSettings, app.user.id, mark.id),
+      mark.templateId ? getMarkTemplateSeedMetadata(app.repositories.appSettings, app.user.id, mark.templateId) : Promise.resolve(null),
+      app.repositories.strength.getSessionByMarkInstance(mark.id),
+    ]);
+    const pathId = mapUiPathId(path?.slug, path?.title);
+    const golfWorkoutType = pathId === "golf" ? resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) : null;
+    if (golfWorkoutType) {
+      const launchConfig = await buildGolfPracticeLaunchConfig(app, mark);
+      const routineTemplateId = existingSession?.routineTemplateId ?? launchConfig?.defaultOptionId;
+      return {
+        interactionKind: "golf_practice",
+        launchConfig,
+        launch: {
+          kind: "golf_practice",
+          markTitle: mark.title,
+          routineTemplateId,
+          workoutType: golfWorkoutType,
+        },
+      };
+    }
+
+    if (markMetadata?.blockType !== "workout_block" && templateMetadata?.blockType !== "workout_block") {
+      return null;
+    }
+    const launchConfig = await buildHealthWorkoutLaunchConfig(app, mark);
+    return {
+      interactionKind: "strength_session",
+      launchConfig,
+      launch: {
+        kind: "strength_session",
+        markTitle: mark.title,
+        routineTemplateId: existingSession?.routineTemplateId ?? launchConfig?.defaultOptionId,
+      },
+    };
+  };
+  const refreshAfterWeeklyMarkMutation = () => {
+    refreshLoadedShellData();
+  };
+  const handleWeeklyMarkAction = async (markId: string, value?: PlannedMarkActionValue) => {
+    if (selectedWeeklyMark?.id === markId && selectedWeeklyMark.interactionKind === "strength_session") {
+      setSelectedWeeklyMark(null);
+      setSelectedWeeklyMarkActionMode("execution");
+      pushRoute({ kind: "workoutReview", markId, parentTab: "me", routineTemplateId: value?.routineTemplateId });
+      return;
+    }
+    if (selectedWeeklyMark?.id === markId && selectedWeeklyMark.interactionKind === "golf_practice") {
+      const option = value?.routineTemplateId
+        ? selectedWeeklyMark.actionSheet?.launchConfig?.options.find((item) => item.routineTemplateId === value.routineTemplateId)
+        : undefined;
+      const markTitle = option?.title.en ?? selectedWeeklyMark.title.en;
+      setSelectedWeeklyMark(null);
+      setSelectedWeeklyMarkActionMode("execution");
+      pushRoute({
+        kind: "golfPractice",
+        parentTab: "me",
+        markId,
+        markTitle,
+        routineTemplateId: value?.routineTemplateId,
+        workoutType: resolveGolfPracticeWorkoutTypeForMarkTitle(markTitle) ?? "putting",
+        mode: "review",
+      });
+      return;
+    }
+    await app.markEngine.completeMarkInstance({ markInstanceId: markId });
+    refreshAfterWeeklyMarkMutation();
+  };
+  const handleWeeklyMoveMark = async (markId: string, value: MoveMarkValue) => {
+    await app.markEngine.rescheduleMarkInstance({
+      markInstanceId: markId,
+      targetLocalDate: value.date,
+      scheduledStartAt: value.startTime ? buildWaymarkLocalDateTime(value.date, value.startTime) : undefined,
+      scheduledEndAt: value.endTime ? buildWaymarkLocalDateTime(value.date, value.endTime) : undefined,
+    });
+    refreshAfterWeeklyMarkMutation();
+  };
+  const handleWeeklySkipMark = async (markId: string) => {
+    await app.markEngine.skipMarkInstance({ markInstanceId: markId });
+    refreshAfterWeeklyMarkMutation();
+  };
+  const handleWeeklyUpdateMarkNote = async (markId: string, note: string) => {
+    const normalizedNote = note.trim();
+    await app.repositories.marks.upsertMarkInstanceDetail(markId, {
+      preActionComment: normalizedNote || null,
+      userEditedAt: new Date().toISOString(),
+    });
+    refreshAfterWeeklyMarkMutation();
+  };
   const openGolfPractice = (
     parentTab: Exclude<BottomTabId, "capture"> = "paths",
-    options?: { markId?: string; markTitle?: string; workoutType?: "putting" | "swing" },
+    options?: { markId?: string; markTitle?: string; routineTemplateId?: string; workoutType?: "putting" | "swing" },
   ) => {
-    pushRoute({ kind: "golfPractice", parentTab, markId: options?.markId, markTitle: options?.markTitle, workoutType: options?.workoutType });
+    pushRoute({ kind: "golfPractice", parentTab, markId: options?.markId, markTitle: options?.markTitle, routineTemplateId: options?.routineTemplateId, workoutType: options?.workoutType });
+  };
+  const openWeeklySessionReview = (
+    markId: string,
+    launch: WeeklySessionReviewLaunch,
+    parentTab: Exclude<BottomTabId, "capture">,
+  ) => {
+    if (launch.kind === "strength_session") {
+      pushRoute({ kind: "workoutReview", markId, parentTab, routineTemplateId: launch.routineTemplateId });
+      return;
+    }
+    pushRoute({
+      kind: "golfPractice",
+      parentTab,
+      markId,
+      markTitle: launch.markTitle,
+      routineTemplateId: launch.routineTemplateId,
+      workoutType: launch.workoutType ?? "putting",
+      mode: "review",
+    });
+  };
+  const refreshTodayCockpitAfterMarkCompletion = async () => {
+    await Promise.all([liveToday.refresh(false), journal.refresh()]);
+  };
+  const handleConfirmDailyPlan = () => {
+    if (confirmingDailyPlan) {
+      return;
+    }
+    Alert.alert(
+      locale === "vi" ? "Xác nhận kế hoạch hôm nay?" : "Confirm today’s plan?",
+      locale === "vi"
+        ? "Sau khi xác nhận, Waymark sẽ chuyển Today sang chế độ thực thi và tải lại cockpit ngay."
+        : "After confirmation, Waymark will switch Today into execution mode and reload the cockpit immediately.",
+      [
+        { text: locale === "vi" ? "Hủy" : "Cancel", style: "cancel" },
+        {
+          text: locale === "vi" ? "Xác nhận" : "Confirm",
+          onPress: () => {
+            void (async () => {
+              setConfirmingDailyPlan(true);
+              try {
+                await liveToday.confirmDailyPlan();
+                await liveToday.refresh(false);
+              } catch (error) {
+                Alert.alert(
+                  locale === "vi" ? "Không thể xác nhận kế hoạch" : "Unable to confirm today’s plan",
+                  error instanceof Error ? error.message : locale === "vi" ? "Đã có lỗi xảy ra." : "An unexpected error occurred.",
+                );
+              } finally {
+                setConfirmingDailyPlan(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
   };
   const handleSaveGolfPractice = (input: SaveGolfPracticeLogInput) => {
     if (savingGolfPractice) {
@@ -2105,10 +2468,11 @@ export function WaymarkShellApp() {
         await saveGolfPracticeLog(
           app.repositories,
           app.user.id,
-          route.kind === "golfPractice" && route.markId ? { ...input, markInstanceId: route.markId } : input,
+          route.kind === "golfPractice" && route.markId
+            ? { ...input, markInstanceId: route.markId, routineTemplateId: route.routineTemplateId }
+            : input,
         );
-        liveToday.refresh();
-        journal.refresh();
+        await refreshTodayCockpitAfterMarkCompletion();
       } catch (error) {
         Alert.alert(
           locale === "vi" ? "Khong luu duoc Golf Practice" : "Unable to save Golf Practice",
@@ -2119,14 +2483,14 @@ export function WaymarkShellApp() {
       }
     })();
   };
-  const openStrengthSessionFromMark = (markId: string, parentTab: Exclude<BottomTabId, "capture"> = "today") => {
+  const openStrengthSessionFromMark = (markId: string, parentTab: Exclude<BottomTabId, "capture"> = "today", value?: PlannedMarkActionValue) => {
     if (startingStrengthMarkId === markId) {
       return;
     }
     void (async () => {
       setStartingStrengthMarkId(markId);
       try {
-        await app.strengthSessionEngine.startWorkoutSession({ markInstanceId: markId });
+        await app.strengthSessionEngine.startWorkoutSession({ markInstanceId: markId, routineTemplateId: value?.routineTemplateId });
         pushRoute({ kind: "strengthSession", markId, parentTab });
       } catch (error) {
         Alert.alert(
@@ -2241,7 +2605,7 @@ export function WaymarkShellApp() {
               completed: true,
             });
             strengthSession.refresh();
-            liveToday.refresh();
+            await liveToday.refresh(false);
             return;
           }
           case "start_next_set": {
@@ -2296,7 +2660,7 @@ export function WaymarkShellApp() {
               completed: true,
             });
             strengthSession.refresh();
-            liveToday.refresh();
+            await liveToday.refresh(false);
             return;
           }
           case "start_cooldown":
@@ -2311,8 +2675,7 @@ export function WaymarkShellApp() {
             await app.strengthSessionEngine.completeCooldown({ workoutSessionInstanceId: sessionId });
             setStrengthSessionDraft(null);
             strengthSession.refresh();
-            liveToday.refresh();
-            journal.refresh();
+            await refreshTodayCockpitAfterMarkCompletion();
             return;
           case "done":
             setStrengthSessionDraft(null);
@@ -2354,7 +2717,7 @@ export function WaymarkShellApp() {
                 await app.strengthSessionEngine.endWorkoutSession({ workoutSessionInstanceId: strengthReadModel.session.id });
                 setStrengthSessionDraft(null);
                 strengthSession.refresh();
-                liveToday.refresh();
+                await refreshTodayCockpitAfterMarkCompletion();
                 popRoute();
               } catch (error) {
                 Alert.alert(
@@ -2398,7 +2761,7 @@ export function WaymarkShellApp() {
                 strengthAutoPrepKeyRef.current = `${restarted.id}:${WorkoutSessionStatus.ExerciseActive}:manual-reset:exercise`;
                 setStrengthSessionDraft(null);
                 strengthSession.refresh();
-                liveToday.refresh();
+                await liveToday.refresh(false);
               } catch (error) {
                 Alert.alert(
                   locale === "vi" ? "Khong reset duoc buoi tap" : "Unable to reset workout session",
@@ -2419,12 +2782,11 @@ export function WaymarkShellApp() {
     );
   };
 
-  const refreshStrengthEngineSurfaces = () => {
+  const refreshStrengthEngineSurfaces = async () => {
     setStrengthSessionDraft(null);
     strengthPendingSyncKeyRef.current = null;
     strengthSession.refresh();
-    liveToday.refresh();
-    journal.refresh();
+    await refreshTodayCockpitAfterMarkCompletion();
   };
 
   const completeStrengthExerciseForTest = async (sessionId: string, exercise: StrengthExercise) => {
@@ -2490,7 +2852,7 @@ export function WaymarkShellApp() {
       return;
     }
 
-    const targetExercise = resolvedStrengthSession.exercises.find((exercise) => exercise.state === "upcoming");
+        const targetExercise = resolvedStrengthSession.exercises.find((exercise) => exercise.state === "upcoming");
     if (!targetExercise) {
       return;
     }
@@ -2498,7 +2860,7 @@ export function WaymarkShellApp() {
     void (async () => {
       try {
         await startStrengthExerciseForInteraction(strengthReadModel.session.id, targetExercise.id, targetExercise.mode);
-        refreshStrengthEngineSurfaces();
+        await refreshStrengthEngineSurfaces();
       } catch (error) {
         showHealthEngineError(error);
       }
@@ -2516,7 +2878,7 @@ export function WaymarkShellApp() {
         for (const exercise of resolvedStrengthSession.exercises) {
           await completeStrengthExerciseForTest(sessionId, exercise);
         }
-        refreshStrengthEngineSurfaces();
+        await refreshStrengthEngineSurfaces();
       } catch (error) {
         showHealthEngineError(error);
       }
@@ -2531,7 +2893,7 @@ export function WaymarkShellApp() {
     void (async () => {
       try {
         await enterStrengthCooldownForInteraction(strengthReadModel.session.id, resolvedStrengthSession);
-        refreshStrengthEngineSurfaces();
+        await refreshStrengthEngineSurfaces();
       } catch (error) {
         showHealthEngineError(error);
       }
@@ -2546,7 +2908,7 @@ export function WaymarkShellApp() {
     void (async () => {
       try {
         await app.strengthSessionEngine.completeCooldown({ workoutSessionInstanceId: strengthReadModel.session.id });
-        refreshStrengthEngineSurfaces();
+        await refreshStrengthEngineSurfaces();
       } catch (error) {
         showHealthEngineError(error);
       }
@@ -2564,7 +2926,7 @@ export function WaymarkShellApp() {
           workoutSessionInstanceId: strengthReadModel.session.id,
           note: "Health engine dev test",
         });
-        refreshStrengthEngineSurfaces();
+        await refreshStrengthEngineSurfaces();
         popRoute();
       } catch (error) {
         showHealthEngineError(error);
@@ -2686,19 +3048,24 @@ export function WaymarkShellApp() {
     })();
   };
 
-  const handleMarkAction = async (markId: string) => {
+  const handleMarkAction = async (markId: string, value?: PlannedMarkActionValue) => {
     const mark = todayMarks.find((item) => item.id === markId);
     if (mark?.interactionKind === "strength_session") {
       setSelectedTodayMark(null);
-      openStrengthSessionFromMark(markId, "today");
+      openStrengthSessionFromMark(markId, "today", value);
       return;
     }
     if (mark?.interactionKind === "golf_practice") {
+      const selectedOption = value?.routineTemplateId
+        ? mark.actionSheet?.launchConfig?.options.find((option) => option.routineTemplateId === value.routineTemplateId)
+        : undefined;
+      const selectedTitle = selectedOption?.title.en ?? mark.title.en;
       setSelectedTodayMark(null);
       openGolfPractice("today", {
         markId,
-        markTitle: mark.title.en,
-        workoutType: resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title.en) ?? "putting",
+        markTitle: selectedTitle,
+        routineTemplateId: value?.routineTemplateId,
+        workoutType: resolveGolfPracticeWorkoutTypeForMarkTitle(selectedTitle) ?? "putting",
       });
       return;
     }
@@ -2753,9 +3120,11 @@ export function WaymarkShellApp() {
     })();
   };
 
-  const handleUpdateMarkDetail = async (markId: string, detail: string) => {
-    await app.repositories.marks.updateMarkInstance(markId, {
-      description: detail.trim() || null,
+  const handleUpdateMarkNote = async (markId: string, note: string) => {
+    const normalizedNote = note.trim();
+    await app.repositories.marks.upsertMarkInstanceDetail(markId, {
+      preActionComment: normalizedNote || null,
+      userEditedAt: new Date().toISOString(),
     });
     liveToday.refresh();
   };
@@ -2817,7 +3186,7 @@ export function WaymarkShellApp() {
       }
 
       const activePaths = await app.repositories.paths.listActivePaths(app.user.id);
-      const targetPath = activePaths.find((path) => {
+      const targetPath = activePaths.find((path) => path.id === value.pathId) ?? activePaths.find((path) => {
         const normalized = `${path.slug} ${path.title}`.toLowerCase();
         return (
           (value.pathId === "career" && normalized.includes("career")) ||
@@ -2836,6 +3205,8 @@ export function WaymarkShellApp() {
         substituteTitle: value.title.trim(),
         substituteDescription: value.detail?.trim() || undefined,
         substitutePathId: targetPath?.id,
+        substituteExpeditionId: value.expeditionId,
+        substituteMilestoneId: value.milestoneId,
         substituteMode: { mode: "ready" },
       });
       liveToday.refresh();
@@ -3184,6 +3555,7 @@ export function WaymarkShellApp() {
         return (
           <TodayCockpitScreen
             closeTrailStatus={liveToday.status === "loading" ? "loading" : liveTodayData?.closeTrailStatus ?? "default"}
+            confirmDailyPlanLoading={confirmingDailyPlan}
             currentExpeditions={liveTodayData?.currentExpeditions ?? []}
             dailyPlanMode={liveTodayData?.dailyPlanMode ?? "execution"}
             featureFlags={liveTodayData?.featureFlags ?? {
@@ -3203,18 +3575,7 @@ export function WaymarkShellApp() {
             locale={locale}
             marks={todayMarks}
             onOpenCloseTrail={() => pushRoute({ kind: "closeTrail" })}
-            onConfirmDailyPlan={() => {
-              void (async () => {
-                try {
-                  await liveToday.confirmDailyPlan();
-                } catch (error) {
-                  Alert.alert(
-                    locale === "vi" ? "Không thể xác nhận kế hoạch" : "Unable to confirm today’s plan",
-                    error instanceof Error ? error.message : locale === "vi" ? "Đã có lỗi xảy ra." : "An unexpected error occurred.",
-                  );
-                }
-              })();
-            }}
+            onConfirmDailyPlan={handleConfirmDailyPlan}
             onOpenExpedition={(expedition) => openExpedition(expedition.id)}
             onOpenMarkDetail={(mark) => {
               setSelectedTodayMark(mark);
@@ -3319,15 +3680,14 @@ export function WaymarkShellApp() {
             errorMessage={weeklyMilestones.error?.message}
             locale={locale}
             milestones={weeklyMilestones.items}
-            missingStartDateCount={weeklyMilestones.missingStartDateCount}
+            onCompleteMilestone={(milestoneId) => void completeWeeklyMilestone(milestoneId)}
+            onMoveMilestone={(milestoneId) => void moveWeeklyMilestone(milestoneId)}
+            onOpenMark={openWeeklyMilestoneMark}
             onOpenPath={(pathId) => pushRoute({ kind: "pathDetail", pathId })}
-            onSelectPath={setWeeklyMilestonesPathId}
-            pathFilters={weeklyMilestones.pathFilters}
-            selectedPathId={weeklyMilestonesPathId}
+            onOpenExpedition={(expeditionId) => openExpedition(expeditionId, "paths")}
+            onSkipMilestone={(milestoneId) => void skipWeeklyMilestone(milestoneId)}
             showBottomNav={false}
             status={weeklyMilestones.status}
-            weekEnd={weeklyMilestones.weekEnd}
-            weekStart={weeklyMilestones.weekStart}
           />
         );
       case "me":
@@ -3336,7 +3696,6 @@ export function WaymarkShellApp() {
             hubItems={buildMeHubItems(
               locale,
               () => pushRoute({ kind: "backlog" }),
-              () => pushRoute({ kind: "weeklyCoding" }),
               () => pushRoute({ kind: "weeklyTimetable" }),
               () => pushRoute({ kind: "weeklySignal" }),
               () => pushRoute({ kind: "closeTrail" }),
@@ -3370,14 +3729,24 @@ export function WaymarkShellApp() {
                 },
               ],
               groups: [
-                {
-                  id: "prod-weekly-imports",
+                ...(ENABLE_PREVIEW_ME_TOOLS ? [{
+                  id: "dev-weekly-imports",
                   title: locale === "vi" ? "Weekly Timetable Import" : "Weekly Timetable Import",
                   subtitle:
                     locale === "vi"
                       ? "Nhap/cap nhat lich tuan vao week plans, planned marks va signals."
                       : "Import and update weekly schedules into week plans, planned marks, and signals.",
                   rows: [
+                    {
+                      id: "prod-import-golf-program-dev-marks",
+                      title: locale === "vi" ? "Import Golf Program dev marks" : "Import Golf Program dev marks",
+                      subtitle:
+                        locale === "vi"
+                          ? "Tao 4 marks test cho flow Warm-up -> Revision -> Practice cua chuong trinh golf 13 tuan."
+                          : "Create 4 test marks for the Golf Program Warm-up -> Revision -> Practice flow.",
+                      icon: "entity.mark" as const,
+                      onPress: handleImportGolfProgramDevMarks,
+                    },
                     {
                       id: "prod-import-weekly-timetable-20260803",
                       title: locale === "vi" ? "Import Weekly Timetable 03/08" : "Import Weekly Timetable 08/03",
@@ -3509,15 +3878,15 @@ export function WaymarkShellApp() {
                       onPress: handleImportSampleWeeklyTimetable,
                     },
                   ],
-                },
+                }] : []),
                 {
                   id: "prod-turso-sync",
                   title: locale === "vi" ? "Turso Sync" : "Turso Sync",
                   subtitle:
                     tursoDevSync.lastMessage ??
                     (locale === "vi"
-                      ? "Day/pull du lieu Waymark qua Turso theo batch manual/EOD."
-                      : "Push and pull Waymark data through Turso by manual/EOD batch."),
+                      ? "Turso Full-DB la source of truth; Waymark pull vao cache va chi push mutation khi EOD."
+                      : "Turso Full-DB is source of truth; Waymark pulls into cache and pushes mutations only at EOD."),
                   rows: [
                     {
                       id: "prod-turso-link",
@@ -3536,133 +3905,38 @@ export function WaymarkShellApp() {
                       icon: "status.protected" as const,
                       loading: tursoDevSync.status === "uploading",
                       disabled: tursoDevSync.disabled,
-                      onPress: handleOpenTursoLinkModal,
-                    },
-                    {
-                      id: "prod-turso-unlink",
-                      title: locale === "vi" ? "Bo link Turso tren may nay" : "Unlink Turso on this device",
-                      subtitle:
-                        locale === "vi"
-                          ? "Xoa URL/token da luu trong SecureStore. Khong xoa data local hoac remote."
-                          : "Remove the URL/token saved in SecureStore. Local and remote data are not deleted.",
-                      icon: "status.missed" as const,
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleUnlinkTurso,
+                      onPress: tursoDevSync.configured ? handleUnlinkTurso : handleOpenTursoLinkModal,
                     },
                     {
                       id: "prod-turso-manual-upload",
-                      title: locale === "vi" ? "Upload Waymark len Turso" : "Upload Waymark to Turso",
+                      title: locale === "vi" ? "Chay EOD Full-DB Sync" : "Run EOD Full-DB Sync",
                       subtitle:
                         locale === "vi"
-                          ? "Day cac sync_outbox pending/failed len Turso ngay bay gio. Khong phai realtime sync."
-                          : "Push pending/failed sync_outbox rows to Turso now. This is not realtime sync.",
+                          ? "Day cac mutation Waymark duoc phep vao bang typed tren Turso; ownership va field allowlist duoc kiem tra."
+                          : "Push allowed Waymark mutations into typed Turso tables with ownership and field allowlists.",
                       icon: "status.protected" as const,
                       loading: tursoDevSync.status === "uploading",
                       disabled: tursoDevSync.disabled || !tursoDevSync.configured,
                       onPress: handleTursoManualUpload,
                     },
                     {
-                      id: "prod-turso-upload-all-tables",
-                      title: locale === "vi" ? "Upload tat ca bang Waymark" : "Upload all Waymark tables",
-                      subtitle:
-                        locale === "vi"
-                          ? "Snapshot toan bo bang canonical vao outbox roi upload het len Turso theo batch."
-                          : "Snapshot every canonical table into the outbox, then upload everything to Turso in batches.",
-                      icon: "entity.privateDocument" as const,
-                      loading: tursoDevSync.status === "uploading",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoUploadAllTables,
-                    },
-                    {
-                      id: "prod-turso-upload-typed-week-plans",
-                      title: locale === "vi" ? "Upload typed week_plans" : "Upload typed week_plans",
-                      subtitle:
-                        locale === "vi"
-                          ? "Test bang physical week_plans tren Turso de edit truc tiep trong Studio."
-                          : "Test the physical week_plans table on Turso for direct Studio edits.",
-                      icon: "entity.privateDocument" as const,
-                      loading: tursoDevSync.status === "uploading",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoUploadTypedWeekPlans,
-                    },
-                    {
-                      id: "prod-turso-upload-typed-week-plan-items",
-                      title: locale === "vi" ? "Upload typed week_plan_items" : "Upload typed week_plan_items",
-                      subtitle:
-                        locale === "vi"
-                          ? "Day cac row lich chi tiet len bang physical week_plan_items tren Turso."
-                          : "Push detailed timetable rows into the physical week_plan_items table on Turso.",
-                      icon: "entity.mark" as const,
-                      loading: tursoDevSync.status === "uploading",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoUploadTypedWeekPlanItems,
-                    },
-                    {
-                      id: "prod-turso-upload-typed-hierarchy",
-                      title: locale === "vi" ? "Upload Paths/Expeditions/Marks" : "Upload Paths/Expeditions/Marks",
-                      subtitle:
-                        locale === "vi"
-                          ? "Day paths, expeditions va mark_instances vao cac bang physical tren Turso de xem/filter trong Studio."
-                          : "Push paths, expeditions, and mark_instances into physical Turso tables for Studio view/filter.",
-                      icon: "entity.mark" as const,
-                      loading: tursoDevSync.status === "uploading",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoUploadHierarchyProjection,
-                    },
-                    {
-                      id: "prod-turso-download-upload-log",
-                      title: locale === "vi" ? "Download Turso upload log" : "Download Turso upload log",
-                      subtitle: tursoDevSync.debugLogSummary,
-                      icon: "entity.privateDocument" as const,
-                      onPress: tursoDevSync.downloadDebugLog,
-                    },
-                    {
-                      id: "prod-turso-eod-upload",
-                      title: locale === "vi" ? "Run Turso EOD upload" : "Run Turso EOD upload",
-                      subtitle:
-                        locale === "vi"
-                          ? "Chay cung batch upload nhung gan trigger EOD de dung cho close-day flow."
-                          : "Run the same batch upload with the EOD trigger for close-day flow.",
-                      icon: "entity.privateDocument" as const,
-                      loading: tursoDevSync.status === "uploading",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoEodUpload,
-                    },
-                    {
                       id: "prod-turso-pull-remote-edits",
-                      title: locale === "vi" ? "Pull Turso edits ve Waymark" : "Pull Turso edits into Waymark",
+                      title: locale === "vi" ? "Pull Turso Full-DB" : "Pull Turso Full-DB",
                       subtitle:
                         locale === "vi"
-                          ? "Keo remote edits cho week_plans, week_plan_items va signals vao SQLite local."
-                          : "Pull remote edits for week_plans, week_plan_items, and signals into local SQLite.",
+                          ? "Lan dau keo full snapshot; cac lan sau chi keo change log vao SQLite cache."
+                          : "Pull a full snapshot first, then apply incremental change-log entries into the SQLite cache.",
                       icon: "entity.signal" as const,
                       loading: tursoDevSync.status === "pulling",
                       disabled: tursoDevSync.disabled || !tursoDevSync.configured,
                       onPress: handleTursoPullRemoteEdits,
                     },
                     {
-                      id: "prod-turso-pull-typed-week-plans",
-                      title: locale === "vi" ? "Pull typed planning" : "Pull typed planning",
-                      subtitle:
-                        locale === "vi"
-                          ? "Keo change-log typed week_plans va week_plan_items ve SQLite local bang cursor planning."
-                          : "Pull typed week_plans and week_plan_items change logs into local SQLite with the planning cursor.",
-                      icon: "entity.signal" as const,
-                      loading: tursoDevSync.status === "pulling",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoPullTypedWeekPlans,
-                    },
-                    {
-                      id: "prod-turso-clear-dev-pushes",
-                      title: locale === "vi" ? "Xoa Waymark Dev tren Turso" : "Clear Waymark Dev on Turso",
-                      subtitle:
-                        locale === "vi"
-                          ? "Xoa remote records da day tu device dev hien tai de don du lieu test. Local SQLite khong bi xoa."
-                          : "Remove remote records pushed by this dev device to clean test data. Local SQLite is not deleted.",
-                      icon: "status.missed" as const,
-                      loading: tursoDevSync.status === "clearing",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleClearTursoDevPushes,
+                      id: "prod-turso-download-log",
+                      title: locale === "vi" ? "Get Turso Log" : "Get Turso Log",
+                      subtitle: tursoDevSync.debugLogSummary,
+                      icon: "entity.privateDocument" as const,
+                      onPress: tursoDevSync.downloadDebugLog,
                     },
                   ],
                 },
@@ -3788,6 +4062,50 @@ export function WaymarkShellApp() {
                             ? "Cong cu reset, test va debug chi dung khi phat trien."
                             : "Reset, test, and debug tools used only during development.",
                         rows: [
+                      {
+                        id: "debug-turso-pull-trail-days",
+                        title: "Pull all Trail Days",
+                        subtitle:
+                          locale === "vi"
+                            ? "Dev recovery: keo toan bo trail_days tu Turso ve local; chay truoc Pull all Marks."
+                            : "Dev recovery: pull all trail_days from Turso into local; run before Pull all Marks.",
+                        icon: "utility.calendar" as const,
+                        loading: tursoDevSync.status === "pulling",
+                        disabled: tursoDevSync.disabled || !tursoDevSync.configured,
+                        onPress: handleTursoPullTrailDays,
+                      },
+                      {
+                        id: "debug-turso-pull-marks",
+                        title: locale === "vi" ? "Pull all Marks" : "Pull all Marks",
+                        subtitle:
+                          locale === "vi"
+                            ? "Dev recovery: keo toan bo mark_instances tu Turso ve local; tach rieng voi pull hierarchy."
+                            : "Dev recovery: pull all mark_instances from Turso into local; separate from hierarchy pull.",
+                        icon: "entity.mark" as const,
+                        loading: tursoDevSync.status === "pulling",
+                        disabled: tursoDevSync.disabled || !tursoDevSync.configured,
+                        onPress: handleTursoPullMarks,
+                      },
+                      {
+                        id: "debug-clear-local-progress-map-for-turso-pull",
+                        title:
+                          locale === "vi"
+                            ? "Xoa local Expedition/Milestone/Mark"
+                            : "Clear local Expedition/Milestone/Mark",
+                        subtitle:
+                          locale === "vi"
+                            ? "Dev only: hard-delete local hierarchy + marks de pull lai tu Turso cho sach."
+                            : "Dev only: hard-delete local hierarchy + marks so Turso can repopulate them cleanly.",
+                        icon: "status.missed" as const,
+                        onPress: handleClearLocalProgressMapForTursoPull,
+                      },
+                      {
+                        id: "debug-download-turso-log",
+                        title: locale === "vi" ? "Download Turso log" : "Download Turso log",
+                        subtitle: tursoDevSync.debugLogSummary,
+                        icon: "entity.privateDocument" as const,
+                        onPress: tursoDevSync.downloadDebugLog,
+                      },
                       {
                         id: "debug-export-db",
                         title: locale === "vi" ? "Export database local" : "Export local database",
@@ -3955,6 +4273,7 @@ export function WaymarkShellApp() {
               void (async () => {
                 try {
                   await closeTrail.closeDay(input);
+                  await tursoDevSync.runEodUpload();
                   liveToday.refresh();
                   journal.refresh();
                 } catch (error) {
@@ -4143,13 +4462,38 @@ export function WaymarkShellApp() {
             initialWorkoutType={route.workoutType ?? "putting"}
             locale={locale}
             onBack={popRoute}
-            onSave={handleSaveGolfPractice}
+            onSave={route.mode === "review" ? undefined : handleSaveGolfPractice}
+            reviewOnly={route.mode === "review"}
+            reviewTitle={markTitle}
             saving={savingGolfPractice}
             shortGamePlan={markTitle ? buildGolfShortGamePracticePlanForMarkTitle(markTitle) : null}
+            swingPlan={markTitle ? buildGolfProgramPracticePlanForTitle(markTitle) : null}
             workoutTypeLocked={Boolean(route.markId)}
           />
         );
       }
+      case "workoutReview":
+        if (workoutReview.status === "loading" || workoutReview.status === "idle") {
+          return (
+            <FieldJournalScreenShell variant="navAware">
+              <WMEmptyState
+                body={locale === "vi" ? "Dang dung workout review tu routine template." : "Building the workout review from the routine template."}
+                title={locale === "vi" ? "Dang tai workout review" : "Loading workout review"}
+              />
+            </FieldJournalScreenShell>
+          );
+        }
+        if (workoutReview.status === "error" || !workoutReview.data) {
+          return (
+            <FieldJournalScreenShell variant="navAware">
+              <WMEmptyState
+                body={workoutReview.status === "error" ? workoutReview.error.message : locale === "vi" ? "Khong tim thay routine phu hop cho mark nay." : "No matching routine is available for this mark."}
+                title={locale === "vi" ? "Workout review khong kha dung" : "Workout review unavailable"}
+              />
+            </FieldJournalScreenShell>
+          );
+        }
+        return <WorkoutSessionReviewTemplate data={workoutReview.data} locale={locale} onBack={popRoute} />;
       case "detail": {
         if (route.sourceType === "pack_check_instance") {
           if (!packCheckDetail.data?.packCheck) {
@@ -4205,9 +4549,7 @@ export function WaymarkShellApp() {
               ? memoryDetail.memory
             : route.sourceType === "backlog_item"
               ? backlog.detailById[route.sourceId] ?? null
-              : route.sourceType === "week_plan_item"
-                ? weekly.detailById[route.sourceId] ?? null
-                : null;
+              : null;
 
         if (!detailItem && route.sourceType === "memory" && memoryDetail.status === "loading") {
           return (
@@ -4243,52 +4585,11 @@ export function WaymarkShellApp() {
             ]
           : undefined;
 
-        if (route.sourceType === "week_plan_item") {
-          return (
-            <WeeklyDetailTemplate
-              item={detailItem}
-              locale={locale}
-              onAddToToday={() => {
-                void (async () => {
-                  await weekly.addItemToToday(detailItem.id);
-                  liveToday.refresh();
-                  journal.refresh();
-                })();
-              }}
-              onBack={popRoute}
-              onDelete={() => {
-                void (async () => {
-                  await weekly.deleteItem(detailItem.id);
-                  popRoute();
-                })();
-              }}
-              onMove={(_, value) => {
-                void (async () => {
-                  await weekly.moveItem(detailItem.id, value);
-                  liveToday.refresh();
-                  journal.refresh();
-                })();
-              }}
-              onMoveToBacklog={() => {
-                void weekly.removeFromWeek(detailItem.id);
-                popRoute();
-              }}
-              onOpenExpedition={(expedition) => openExpedition(expedition.id, route.parentTab)}
-            />
-          );
-        }
-
         if (route.sourceType === "backlog_item") {
           return (
             <BacklogDetailTemplate
               item={detailItem}
               locale={locale}
-              onAddToWeeklyCoding={() => {
-                void (async () => {
-                  await backlog.addToCurrentWeek(detailItem.id);
-                  popRoute();
-                })();
-              }}
               onBack={popRoute}
               onDelete={() => {
                 void (async () => {
@@ -4330,6 +4631,16 @@ export function WaymarkShellApp() {
           <MarkDetailScreen
             actionButtons={[
               ...(actionButtons ?? []),
+              ...(route.sessionReview
+                ? [
+                    {
+                      id: "review-session",
+                      label: route.sessionReview.kind === "strength_session" ? "Review Workout" : "Review Golf Session",
+                      variant: "secondary" as const,
+                      onPress: () => openWeeklySessionReview(route.sourceId, route.sessionReview!, route.parentTab),
+                    },
+                  ]
+                : []),
               {
                 id: "delete-mark",
                 label: locale === "vi" ? "Xoa" : "Delete",
@@ -4436,9 +4747,10 @@ export function WaymarkShellApp() {
             milestones={expeditionDetail.milestones}
             onBack={popRoute}
             onCompleteMilestone={(milestoneId) => void expeditionDetail.completeMilestone(milestoneId)}
-            onOpenMarkDetail={(markId) => openMarkDetail(markId, route.parentTab)}
+            onOpenMarkDetail={(markId) => void openMarkByStatus(markId, route.parentTab)}
             onRescheduleMilestone={(milestoneId) => void expeditionDetail.rescheduleMilestone(milestoneId)}
             onSkipMilestone={(milestoneId) => void expeditionDetail.skipMilestone(milestoneId)}
+            unassignedMarks={expeditionDetail.unassignedMarks}
           />
         );
       case "pathDetail":
@@ -4458,15 +4770,19 @@ export function WaymarkShellApp() {
             locale={locale}
             nextMarks={pathDetail.data.nextMarks}
             onBack={popRoute}
+            onCompleteMilestone={(milestoneId) => void pathDetail.completeMilestone(milestoneId)}
             onOpenExpedition={(item) => openExpedition(item.id, "paths")}
-            onOpenNextMark={(item) => openMarkDetail(item.id, "paths")}
+            onOpenMilestoneMark={(item) => void openMarkByStatus(item.id, "paths")}
+            onOpenNextMark={(item) => void openMarkByStatus(item.id, "paths")}
             onOpenProof={(item) => {
               if (item.kind === "mark") {
-                openMarkDetail(item.id, "paths");
+                void openMarkByStatus(item.id, "paths");
                 return;
               }
               jumpToTab("journal");
             }}
+            onRescheduleMilestone={(milestoneId) => void pathDetail.rescheduleMilestone(milestoneId)}
+            onSkipMilestone={(milestoneId) => void pathDetail.skipMilestone(milestoneId)}
             onViewAllExpeditions={pathDetail.data.expeditions[0] ? () => openExpedition(pathDetail.data.expeditions[0].id, "paths") : undefined}
             path={pathDetail.data.path}
             primaryAction={
@@ -4482,56 +4798,49 @@ export function WaymarkShellApp() {
         return (
           <BacklogTemplate
             featureFlags={{
-              canAddToWeeklyCoding: true,
               canCreateMarkFromBacklog: false,
               canDeleteBacklogItem: true,
               hasBacklogDetail: true,
             }}
             items={backlog.items}
             locale={locale}
-            onAddToWeeklyCoding={(itemId) => void backlog.addToCurrentWeek(itemId)}
             onBack={popRoute}
             onDeleteBacklogItem={(itemId) => void backlog.deleteItem(itemId)}
             onOpenBacklogItem={(itemId) => openBacklogDetail(itemId, "me")}
             onQueryChange={() => undefined}
           />
         );
-      case "weeklyCoding":
-        return (
-          <WeeklyCodingReportTemplate
-            locale={locale}
-            nextWeekDisabled={weekly.nextWeekDisabled}
-            onBack={popRoute}
-            onDeleteItem={(itemId) => void weekly.deleteItem(itemId)}
-            onNextWeek={weekly.nextWeek}
-            onOpenDetail={(itemId) => openWeeklyDetail(itemId, "me")}
-            onPreviousWeek={weekly.previousWeek}
-            onRemoveFromWeek={(itemId) => void weekly.removeFromWeek(itemId)}
-            previousWeekDisabled={weekly.previousWeekDisabled}
-            pulledItems={weekly.pulledItems}
-            selectedWeekDateRange={weekly.selectedWeekDateRange}
-            selectedWeekLabel={weekly.selectedWeekLabel}
-            showBack
-          />
-        );
       case "weeklyTimetable":
         return (
           <WeeklyTimetableReviewTemplate
-            days={weekly.reviewDays}
+            errorMessage={weeklyMilestones.error?.message}
+            dayNavigatorDays={weeklyTimetableDayNavigatorDays}
+            dayReviewErrorMessage={dayReview.error?.message}
+            dayReviewHasWeeklyTimetableForDate={dayReview.hasWeeklyTimetableForDate}
+            dayReviewMarks={dayReview.marks}
+            dayReviewPlannedItemCount={dayReview.plannedItemCount}
+            dayReviewStatus={dayReview.status}
             locale={locale}
+            milestones={weeklyMilestones.items}
             nextWeekDisabled={weekly.nextWeekDisabled}
             onBack={popRoute}
+            onCompleteMilestone={(milestoneId) => void completeWeeklyMilestone(milestoneId)}
+            onMoveMilestone={(milestoneId) => void moveWeeklyMilestone(milestoneId)}
             onNextWeek={weekly.nextWeek}
-            onOpenItem={(itemId) => openWeeklyDetail(itemId, "me")}
+            onOpenExpedition={(expeditionId) => openExpedition(expeditionId, "me")}
+            onOpenMark={(milestone, mark) => openWeeklyMilestoneMark(milestone, mark, "me", "weekly_timetable")}
+            onOpenDayReviewMark={openDayReviewMark}
+            onOpenPath={(pathId) => pushRoute({ kind: "pathDetail", pathId })}
             onPreviousWeek={weekly.previousWeek}
+            onSelectDayDate={setSelectedWeeklyTimetableDayDate}
+            onSkipMilestone={(milestoneId) => void skipWeeklyMilestone(milestoneId)}
             previousWeekDisabled={weekly.previousWeekDisabled}
+            selectedDayDate={selectedWeeklyTimetableDayDate}
+            selectedDayLabel={selectedWeeklyTimetableDayLabel}
             selectedWeekDateRange={weekly.selectedWeekDateRange}
             selectedWeekLabel={weekly.selectedWeekLabel}
             showBack
-            summary={weekly.reviewSummary}
-            weekEndDate={weekly.weekPlan?.weekEndDate}
-            weekStartDate={weekly.weekPlan?.weekStartDate}
-            weekStatus={weekly.weekPlan?.status}
+            status={weeklyMilestones.status}
           />
         );
       case "weeklySignal":
@@ -4562,7 +4871,7 @@ export function WaymarkShellApp() {
         <StrengthSessionAudioEffects session={resolvedStrengthSession} />
       ) : null}
       {screen}
-      {route.kind !== "strengthSession" && route.kind !== "golfPractice" ? (
+      {route.kind !== "strengthSession" && route.kind !== "workoutReview" && route.kind !== "golfPractice" ? (
         <BottomNavBar activeTab={activeTab} locale={locale} onCaptureDestinationPress={handleCaptureDestination} onTabPress={jumpToTab} />
       ) : null}
       <Modal
@@ -4623,6 +4932,9 @@ export function WaymarkShellApp() {
         locale={locale}
         mode={liveTodayData?.dailyPlanMode ?? "execution"}
         marks={todayMarks}
+        pathOptions={substituteHierarchyOptions.pathOptions}
+        expeditionOptions={substituteHierarchyOptions.expeditionOptions}
+        milestoneOptions={substituteHierarchyOptions.milestoneOptions}
         onClose={() => setSelectedTodayMark(null)}
         onMark={handleMarkAction}
         onMove={handleMoveMark}
@@ -4640,12 +4952,33 @@ export function WaymarkShellApp() {
           pushRoute({ kind: "packCheck", packId: packCheckId });
         }}
         onSkip={handleSkipMark}
-        onUpdateDetail={handleUpdateMarkDetail}
+        onUpdateNote={handleUpdateMarkNote}
         onToggleEmbeddedChecklistItem={(markId, packCheckId, itemId, checked) => {
           void liveToday.toggleEmbeddedChecklistItem(markId, packCheckId, itemId, checked);
         }}
         onSubstituteWithQuickMark={handleSubstituteWithQuickMark}
         visible={route.kind === "today" && selectedTodayMark !== null}
+      />
+      <TodayMarkActionSheet
+        allowPrimaryActionInReview={selectedWeeklyMark?.interactionKind === "strength_session" || selectedWeeklyMark?.interactionKind === "golf_practice"}
+        item={selectedWeeklyMark}
+        locale={locale}
+        marks={selectedWeeklyMark ? [selectedWeeklyMark] : []}
+        mode={selectedWeeklyMarkActionMode}
+        pathOptions={substituteHierarchyOptions.pathOptions}
+        expeditionOptions={substituteHierarchyOptions.expeditionOptions}
+        milestoneOptions={substituteHierarchyOptions.milestoneOptions}
+        onClose={() => {
+          setSelectedWeeklyMark(null);
+          setSelectedWeeklyMarkActionMode("execution");
+        }}
+        onMark={handleWeeklyMarkAction}
+        onMove={handleWeeklyMoveMark}
+        onSkip={handleWeeklySkipMark}
+        onSubstituteWithExisting={handleSubstituteWithExisting}
+        onSubstituteWithQuickMark={handleSubstituteWithQuickMark}
+        onUpdateNote={handleWeeklyUpdateMarkNote}
+        visible={isContextMarkActionSheetRoute(route.kind) && selectedWeeklyMark !== null}
       />
     </View>
   );
@@ -4848,6 +5181,282 @@ function buildDailyJournalTrailTestMarkFixtures(todayLocalDate: string): DailyJo
       localDate,
     }));
   });
+}
+
+function mapWeeklyMilestoneMarkToTodayItem(
+  milestone: WeeklyMilestoneItem,
+  mark: WeeklyMilestoneMarkItem,
+  locale: Locale,
+): TodayMarkItem {
+  const status = mapWeeklyMarkStatus(mark.status);
+  const statusLabel = humanizeWeeklyMarkStatus(status, locale);
+  return {
+    id: mark.id,
+    title: { en: mark.title, vi: mark.title },
+    pathId: milestone.pathId,
+    pathEntityId: milestone.pathRecordId,
+    expeditionId: milestone.expeditionId,
+    milestoneId: milestone.id,
+    status,
+    summary: mark.description ? { en: mark.description, vi: mark.description } : undefined,
+    timeLabel: buildWeeklyMarkTimeLabel(mark),
+    detailEnabled: true,
+    actionSheet: {
+      statusLabel: { en: humanizeWeeklyMarkStatus(status, "en"), vi: humanizeWeeklyMarkStatus(status, "vi") },
+      intentionText: mark.description ? { en: mark.description, vi: mark.description } : undefined,
+      periodLabel: { en: `${mark.dayLabel} ${formatWeeklyMarkDate(mark.localDate)}`, vi: `${mark.dayLabel} ${formatWeeklyMarkDate(mark.localDate)}` },
+      expeditionLabel: { en: milestone.expeditionTitle, vi: milestone.expeditionTitle },
+      milestoneLabel: { en: milestone.title, vi: milestone.title },
+      primaryActionLabel: { en: "Complete", vi: "Complete" },
+      primaryActionHint: {
+        en: `Complete this mark for ${milestone.title}.`,
+        vi: `Complete mark nay cho milestone ${milestone.title}.`,
+      },
+    },
+    accessibilityLabel: { en: `${statusLabel}: ${mark.title}`, vi: `${statusLabel}: ${mark.title}` },
+  };
+}
+
+function mapMarkInstanceToActionSheetItem(
+  mark: MarkInstance,
+  detail: MarkInstanceDetail | null,
+  locale: Locale,
+  context: {
+    path: { id: string; slug?: string; title: string } | null;
+    expeditionTitle?: string;
+    milestoneTitle?: string;
+  },
+): TodayMarkItem {
+  const pathId = mapUiPathId(context.path?.slug, context.path?.title) ?? "career";
+  const status = mapMarkInstanceStatusToTodayStatus(mark.status);
+  const statusLabel = humanizeMarkInstanceStatus(mark.status, locale);
+  const primerText = detail?.primerSnapshot?.trim() || mark.description;
+  const markNote = detail?.preActionComment?.trim();
+  return {
+    id: mark.id,
+    title: { en: mark.title, vi: mark.title },
+    pathId,
+    pathEntityId: context.path?.id ?? mark.pathId,
+    expeditionId: mark.expeditionId,
+    milestoneId: mark.milestoneId,
+    status,
+    summary: primerText ? { en: primerText, vi: primerText } : undefined,
+    timeLabel: buildMarkInstanceTimeLabel(mark),
+    sortAt: mark.scheduledStartAt ?? mark.dueAt ?? mark.createdAt,
+    detailEnabled: true,
+    actionSheet: {
+      statusLabel: { en: humanizeMarkInstanceStatus(mark.status, "en"), vi: humanizeMarkInstanceStatus(mark.status, "vi") },
+      intentionText: primerText ? { en: primerText, vi: primerText } : undefined,
+      markNote: markNote ? { en: markNote, vi: markNote } : undefined,
+      periodLabel: buildMarkInstancePeriodLabel(mark),
+      expeditionLabel: context.expeditionTitle ? { en: context.expeditionTitle, vi: context.expeditionTitle } : undefined,
+      milestoneLabel: context.milestoneTitle ? { en: context.milestoneTitle, vi: context.milestoneTitle } : undefined,
+      primaryActionLabel: { en: "Complete", vi: "Complete" },
+      primaryActionHint: {
+        en: `Complete ${mark.title}.`,
+        vi: `Complete mark ${mark.title}.`,
+      },
+    },
+    accessibilityLabel: { en: `${statusLabel}: ${mark.title}`, vi: `${statusLabel}: ${mark.title}` },
+  };
+}
+
+function mapWeeklyMarkStatus(status: WeeklyMilestoneMarkItem["status"]): TodayMarkStatus {
+  switch (status) {
+    case "completed":
+    case "partially_completed":
+    case "skipped":
+    case "rescheduled":
+    case "substituted":
+    case "cancelled":
+      return "done";
+    case "expired":
+      return "overdue";
+    case "blocked":
+      return "blocked";
+    case "active":
+    case "ready":
+      return "ready";
+    case "planned":
+    default:
+      return "needs_decision";
+  }
+}
+
+function humanizeWeeklyMarkStatus(status: TodayMarkStatus, locale: Locale) {
+  const labels: Record<TodayMarkStatus, Record<Locale, string>> = {
+    ready: { en: "Ready", vi: "San sang" },
+    dependency_required: { en: "Dependency Required", vi: "Can phu thuoc" },
+    blocked: { en: "Blocked", vi: "Bi chan" },
+    ready_with_advisory: { en: "Ready", vi: "San sang" },
+    ready_with_waiver: { en: "Ready", vi: "San sang" },
+    needs_decision: { en: "Planned", vi: "Da len ke hoach" },
+    done: { en: "Done", vi: "Da xong" },
+    resolved: { en: "Resolved", vi: "Da xu ly" },
+    overdue: { en: "Overdue", vi: "Qua han" },
+  };
+  return labels[status][locale];
+}
+
+function mapMarkInstanceStatusToTodayStatus(status: MarkInstanceStatus): TodayMarkStatus {
+  switch (status) {
+    case MarkInstanceStatus.Completed:
+    case MarkInstanceStatus.PartiallyCompleted:
+      return "done";
+    case MarkInstanceStatus.Expired:
+      return "overdue";
+    case MarkInstanceStatus.Blocked:
+      return "blocked";
+    case MarkInstanceStatus.Active:
+    case MarkInstanceStatus.Ready:
+      return "ready";
+    case MarkInstanceStatus.Skipped:
+    case MarkInstanceStatus.Rescheduled:
+    case MarkInstanceStatus.Substituted:
+    case MarkInstanceStatus.Cancelled:
+      return "resolved";
+    case MarkInstanceStatus.Planned:
+    default:
+      return "needs_decision";
+  }
+}
+
+function humanizeMarkInstanceStatus(status: MarkInstanceStatus, locale: Locale) {
+  const labels: Record<MarkInstanceStatus, Record<Locale, string>> = {
+    [MarkInstanceStatus.Planned]: { en: "Planned", vi: "Da len ke hoach" },
+    [MarkInstanceStatus.Ready]: { en: "Ready", vi: "San sang" },
+    [MarkInstanceStatus.Blocked]: { en: "Blocked", vi: "Bi chan" },
+    [MarkInstanceStatus.Active]: { en: "Active", vi: "Dang lam" },
+    [MarkInstanceStatus.Completed]: { en: "Done", vi: "Da xong" },
+    [MarkInstanceStatus.PartiallyCompleted]: { en: "Partially done", vi: "Da lam mot phan" },
+    [MarkInstanceStatus.Skipped]: { en: "Skipped", vi: "Da skip" },
+    [MarkInstanceStatus.Rescheduled]: { en: "Rescheduled", vi: "Da doi lich" },
+    [MarkInstanceStatus.Substituted]: { en: "Substituted", vi: "Da thay the" },
+    [MarkInstanceStatus.Expired]: { en: "Expired", vi: "Qua han" },
+    [MarkInstanceStatus.Cancelled]: { en: "Cancelled", vi: "Da huy" },
+  };
+  return labels[status][locale];
+}
+
+function buildMarkInstanceTimeLabel(mark: MarkInstance): TodayMarkItem["timeLabel"] | undefined {
+  const value = mark.scheduledStartAt ?? mark.dueAt ?? mark.completedAt;
+  if (!value) {
+    return undefined;
+  }
+  const label = formatWeeklyMarkDate(value.slice(0, 10));
+  return { en: label, vi: label };
+}
+
+function buildMarkInstancePeriodLabel(mark: MarkInstance): NonNullable<TodayMarkItem["actionSheet"]>["periodLabel"] {
+  const start = mark.scheduledStartAt ?? mark.dueAt ?? mark.createdAt;
+  const date = formatWeeklyMarkDate(start.slice(0, 10));
+  const startTime = mark.scheduledStartAt?.includes("T") ? mark.scheduledStartAt.slice(11, 16) : undefined;
+  const endTime = mark.scheduledEndAt?.includes("T") ? mark.scheduledEndAt.slice(11, 16) : undefined;
+  const time = startTime && endTime ? `${startTime}-${endTime}` : startTime;
+  const label = time ? `${date} ${time}` : date;
+  return { en: label, vi: label };
+}
+
+function buildWeeklyMarkTimeLabel(mark: WeeklyMilestoneMarkItem): TodayMarkItem["timeLabel"] | undefined {
+  const start = mark.scheduledStartAt;
+  const end = mark.scheduledEndAt;
+  const date = start || mark.dueAt || end;
+  if (!date) {
+    return undefined;
+  }
+
+  const enOptions: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const viOptions: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit" };
+  const enStart = start ? new Date(start).toLocaleTimeString("en-US", enOptions) : undefined;
+  const viStart = start ? new Date(start).toLocaleTimeString("vi-VN", viOptions) : undefined;
+  const enEnd = end ? new Date(end).toLocaleTimeString("en-US", enOptions) : undefined;
+  const viEnd = end ? new Date(end).toLocaleTimeString("vi-VN", viOptions) : undefined;
+
+  if (enStart && enEnd && viStart && viEnd) {
+    return { en: `${enStart}-${enEnd}`, vi: `${viStart}-${viEnd}` };
+  }
+
+  return {
+    en: new Date(date).toLocaleTimeString("en-US", enOptions),
+    vi: new Date(date).toLocaleTimeString("vi-VN", viOptions),
+  };
+}
+
+function formatWeeklyMarkDate(localDate: string) {
+  const [, month, day] = localDate.split("-");
+  return day && month ? `${day}/${month}` : localDate;
+}
+
+type WeeklyTimetableDayCountSource = {
+  localDate: string | null;
+  items: Array<{
+    createdMarkInstanceId?: string;
+  }>;
+};
+
+function buildWeeklyTimetableDayNavigatorDays(
+  weekStart: string,
+  locale: Locale,
+  today: string,
+  reviewDays: WeeklyTimetableDayCountSource[],
+  loadedReviewDate: string | null,
+  loadedReviewMarkCount: number,
+) {
+  const dayByDate = new Map(reviewDays.filter((day) => day.localDate).map((day) => [day.localDate!, day]));
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const localDate = shiftLocalDate(weekStart, index);
+    const source = dayByDate.get(localDate);
+    const fallbackMarkCount = source?.items.filter((item) => item.createdMarkInstanceId).length ?? 0;
+    return {
+      localDate,
+      weekdayLabel: formatWeeklyTimetableWeekdayLabel(localDate, locale),
+      dateLabel: formatWeeklyTimetableShortDateLabel(localDate),
+      plannedItemCount: source?.items.length ?? 0,
+      markCount: localDate === loadedReviewDate ? loadedReviewMarkCount : fallbackMarkCount,
+      isToday: localDate === today,
+    };
+  });
+}
+
+function formatWeeklyTimetableWeekdayLabel(localDate: string, locale: Locale) {
+  return new Date(`${localDate}T00:00:00.000Z`).toLocaleDateString(locale === "vi" ? "vi-VN" : "en-US", {
+    weekday: "short",
+  });
+}
+
+function formatWeeklyTimetableShortDateLabel(localDate: string) {
+  const [, month, day] = localDate.split("-");
+  return day && month ? `${day}/${month}` : localDate;
+}
+
+function formatWeeklyTimetableDayLabel(localDate: string, locale: Locale) {
+  return new Date(`${localDate}T00:00:00.000Z`).toLocaleDateString(locale === "vi" ? "vi-VN" : "en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function getLocalDateDiff(left: string, right: string) {
+  const leftTime = new Date(`${left}T00:00:00.000Z`).getTime();
+  const rightTime = new Date(`${right}T00:00:00.000Z`).getTime();
+  return Math.round((leftTime - rightTime) / 86400000);
+}
+
+function clampDayOffset(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(6, value));
+}
+
+function isContextMarkActionSheetRoute(kind: AppRoute["kind"]) {
+  return kind === "paths" || kind === "pathDetail" || kind === "expeditionDetail" || kind === "weeklyTimetable";
+}
+
+function buildWaymarkLocalDateTime(localDate: string, time: string) {
+  return `${localDate}T${time}:00.000`;
 }
 
 function shiftLocalDateKey(localDate: string, offsetDays: number) {

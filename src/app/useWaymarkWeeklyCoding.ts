@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { MoveMarkValue } from "../components/planned-mark/PlannedMarkActionSheetContent";
 import { MarkDetailItem } from "../components/mark-detail/model";
 import { WeeklyCodingReportItem } from "../components/weekly-coding/WeeklyCoding.types";
 import type { BacklogItem, Expedition, MarkInstance, Milestone, Path, WeekPlan, WeekPlanItem } from "../domain/waymark";
-import { BacklogItemStatus, BacklogItemType, MarkInstanceStatus, SignalStatus, SignalTargetType, WeekPlanItemStatus, WeekPlanStatus } from "../domain/waymark/enums";
-import { getMarkMetadata, setMarkMetadata } from "../lib/waymark/markMetadataStore";
-import { recomputeTrailDayCountersForDate } from "../lib/waymark/plannedMarkSourceOfTruth";
+import { BacklogItemType, SignalStatus, SignalTargetType, WeekPlanItemStatus } from "../domain/waymark/enums";
 import type { Locale } from "../types/ui";
 import { useWaymarkApp, type WaymarkAppServices } from "./WaymarkAppProvider";
 import { formatDayLabel, formatLocalDate, formatWeekRangeLabel, getWeekEndDate, getWeekStartDate, mapUiPathId, pathLabelById } from "./waymarkUi";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
-import { materializeWeeklyPlannedMark } from "../lib/waymark/weeklyPlannedMarkMaterializer";
 
 type WeeklyTimetableReviewItem = {
   id: string;
@@ -293,11 +289,16 @@ export function useWaymarkWeeklyCoding(locale: Locale, options: { enabled?: bool
 
   const signalDays = state.status === "ready" ? state.data.signalDays : [];
   const signalSummary = state.status === "ready" ? state.data.signalSummary : null;
+  const currentWeekStart = useMemo(
+    () => getWeekStartDate(formatLocalDate(new Date(), app.user.timezone), app.user.weekStartsOn),
+    [app.user.timezone, app.user.weekStartsOn],
+  );
 
   const actions = useMemo(
     () => ({
       refresh,
-      selectedWeekLabel: locale === "vi" ? "Tuan nay" : "This Week",
+      selectedWeekStart,
+      selectedWeekLabel: getSelectedWeekLabel(selectedWeekStart, currentWeekStart, locale),
       selectedWeekDateRange: formatWeekRangeLabel(selectedWeekStart, locale),
       previousWeekDisabled: false,
       nextWeekDisabled: false,
@@ -307,179 +308,11 @@ export function useWaymarkWeeklyCoding(locale: Locale, options: { enabled?: bool
       nextWeek() {
         setSelectedWeekStart((current) => shiftWeek(current, 7));
       },
-      async removeFromWeek(itemId: string) {
-        if (state.status !== "ready" || !state.data.weekPlan) {
-          return;
-        }
-        const item = state.data.items.find((entry) => entry.id === itemId);
-        if (!item) {
-          return;
-        }
-        await app.repositories.weekPlans.upsertItems([
-          {
-            ...item,
-            status: WeekPlanItemStatus.Removed,
-          },
-        ]);
-        const backlog = item.backlogItemId ? state.data.backlogById[item.backlogItemId] : undefined;
-        if (backlog && backlog.status === BacklogItemStatus.Pulled) {
-          await app.repositories.backlog.upsert({
-            ...backlog,
-            status: BacklogItemStatus.Open,
-          });
-        }
-        refresh();
-      },
-      async deleteItem(itemId: string) {
-        if (state.status !== "ready") {
-          return;
-        }
-        const item = state.data.items.find((entry) => entry.id === itemId);
-        if (!item) {
-          return;
-        }
-        await app.repositories.weekPlans.softDeleteWeekPlanItem(item.id);
-        const backlog = item.backlogItemId ? state.data.backlogById[item.backlogItemId] : undefined;
-        if (backlog && backlog.status === BacklogItemStatus.Pulled) {
-          await app.repositories.backlog.upsert({
-            ...backlog,
-            status: BacklogItemStatus.Open,
-          });
-        }
-        refresh();
-      },
-      async addItemToToday(itemId: string) {
-        if (state.status !== "ready") {
-          return;
-        }
-        const item = state.data.items.find((entry) => entry.id === itemId);
-        if (!item) {
-          return;
-        }
-        if (item.createdMarkInstanceId) {
-          const existingMetadata = await getMarkMetadata(app.repositories.appSettings, app.user.id, item.createdMarkInstanceId);
-          await setMarkMetadata(app.repositories.appSettings, app.user.id, {
-            ...existingMetadata,
-            markId: item.createdMarkInstanceId,
-            appearsInToday: true,
-            orderIndex: item.sortOrder,
-          });
-          if (item.localDate) {
-            await recomputeTrailDayCountersForDate(app.repositories, app.user.id, item.localDate);
-          }
-          refresh();
-          return;
-        }
-
-        const result = await materializeWeeklyPlannedMark(app.repositories, app.user.id, item, { allowOverlap: true });
-        if (result.mark && item.localDate) {
-          await recomputeTrailDayCountersForDate(app.repositories, app.user.id, item.localDate);
-        }
-        refresh();
-      },
-      async moveItem(itemId: string, value: MoveMarkValue) {
-        if (state.status !== "ready") {
-          return;
-        }
-        const item = state.data.items.find((entry) => entry.id === itemId);
-        if (!item) {
-          return;
-        }
-
-        const nextLocalDate = value.date.trim();
-        const nextStartTime = value.startTime?.trim() || item.startTime;
-        const nextEndTime = value.endTime?.trim() || item.endTime || (nextStartTime ? addMinutesToTime(nextStartTime, 90) : undefined);
-        const previousLocalDate = item.localDate;
-        const updatedItem =
-          (
-            await app.repositories.weekPlans.upsertItems([
-              {
-                ...item,
-                localDate: nextLocalDate,
-                startTime: nextStartTime,
-                endTime: nextEndTime,
-              },
-            ])
-          )[0] ?? item;
-
-        const linkedMark = item.createdMarkInstanceId ? await app.repositories.marks.getMarkInstanceById(item.createdMarkInstanceId) : null;
-        const nextStartAt = nextStartTime ? buildFloatingDateTime(nextLocalDate, nextStartTime) : undefined;
-        const nextEndAt = nextEndTime ? buildFloatingDateTime(nextLocalDate, nextEndTime) : undefined;
-
-        if (linkedMark && canMoveExistingMark(linkedMark.status)) {
-          const existingSignals = await app.repositories.signals.listSignalsByTarget(SignalTargetType.MarkInstance, linkedMark.id);
-          if (previousLocalDate && previousLocalDate !== nextLocalDate) {
-            const previousGenerationKey = linkedMark.generationKey;
-            const rescheduled = await app.markEngine.rescheduleMarkInstance({
-              markInstanceId: linkedMark.id,
-              targetLocalDate: nextLocalDate,
-              scheduledStartAt: nextStartAt,
-              scheduledEndAt: nextEndAt,
-              dueAt: nextEndAt,
-              reason: "Moved from Weekly detail",
-            });
-            let replacement = rescheduled.replacement;
-            if (previousGenerationKey) {
-              await app.repositories.marks.updateMarkInstance(rescheduled.original.id, { generationKey: null });
-              replacement = await app.repositories.marks.updateMarkInstance(replacement.id, { generationKey: previousGenerationKey });
-            }
-            await app.repositories.weekPlans.upsertItems([{ ...updatedItem, createdMarkInstanceId: replacement.id }]);
-            await setMarkMetadata(app.repositories.appSettings, app.user.id, {
-              ...(await getMarkMetadata(app.repositories.appSettings, app.user.id, replacement.id)),
-              markId: replacement.id,
-              appearsInToday: true,
-              orderIndex: updatedItem.sortOrder,
-            });
-            if (nextStartAt && existingSignals.some((signal) => WEEKLY_MOVE_SIGNAL_STATUSES.has(signal.status))) {
-              await app.repositories.signals.createSignal({
-                userId: app.user.id,
-                targetType: SignalTargetType.MarkInstance,
-                targetId: replacement.id,
-                scheduledAt: nextStartAt,
-                status: SignalStatus.Scheduled,
-              });
-            }
-          } else {
-            await app.repositories.marks.updateMarkInstance(linkedMark.id, {
-              scheduledStartAt: nextStartAt ?? null,
-              scheduledEndAt: nextEndAt ?? null,
-              dueAt: nextEndAt ?? null,
-            });
-            if (nextStartAt) {
-              await updateMovableSignalsForMark(app, linkedMark.id, nextStartAt);
-            }
-          }
-        } else if (!linkedMark) {
-          await materializeWeeklyPlannedMark(app.repositories, app.user.id, updatedItem, { allowOverlap: true });
-        }
-
-        if (previousLocalDate) {
-          await recomputeTrailDayCountersForDate(app.repositories, app.user.id, previousLocalDate);
-        }
-        await recomputeTrailDayCountersForDate(app.repositories, app.user.id, nextLocalDate);
-        refresh();
-      },
       async getWeekPlanItemById(itemId: string) {
         return app.repositories.weekPlans.getItemById(itemId);
       },
-      async ensureCurrentWeekPlan() {
-        const weekStartDate = getWeekStartDate(formatLocalDate(new Date(), app.user.timezone), app.user.weekStartsOn);
-        const existing = await app.repositories.weekPlans.getByWeekStart(app.user.id, weekStartDate);
-        return (
-          existing ??
-          app.repositories.weekPlans.upsertWeekPlan({
-            id: createLocalId("week_plan"),
-            userId: app.user.id,
-            weekStartDate,
-            weekEndDate: getWeekEndDate(weekStartDate),
-            status: WeekPlanStatus.Active,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          })
-        );
-      },
     }),
-    [app, locale, refresh, selectedWeekStart, state],
+    [app.repositories.weekPlans, currentWeekStart, locale, refresh, selectedWeekStart],
   );
 
   return {
@@ -583,6 +416,19 @@ function shiftWeek(weekStart: string, deltaDays: number) {
   const date = new Date(`${weekStart}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + deltaDays);
   return date.toISOString().slice(0, 10);
+}
+
+function getSelectedWeekLabel(selectedWeekStart: string, currentWeekStart: string, locale: Locale) {
+  if (selectedWeekStart === currentWeekStart) {
+    return locale === "vi" ? "Tuan nay" : "This Week";
+  }
+  if (selectedWeekStart === shiftWeek(currentWeekStart, -7)) {
+    return locale === "vi" ? "Tuan truoc" : "Last Week";
+  }
+  if (selectedWeekStart === shiftWeek(currentWeekStart, 7)) {
+    return locale === "vi" ? "Tuan sau" : "Next Week";
+  }
+  return locale === "vi" ? `Tuan ${selectedWeekStart}` : `Week ${selectedWeekStart}`;
 }
 
 function hasBacklogItemId(item: WeekPlanItem): item is WeekPlanItem & { backlogItemId: string } {
@@ -718,56 +564,4 @@ function getSignalDisplayTime(value: string, timezone: string) {
   const hour = parts.find((part) => part.type === "hour")?.value ?? "00";
   const minute = parts.find((part) => part.type === "minute")?.value ?? "00";
   return `${hour}:${minute}`;
-}
-
-function createLocalId(prefix: string) {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-const WEEKLY_MOVE_SIGNAL_STATUSES = new Set<SignalStatus>([
-  SignalStatus.Scheduled,
-  SignalStatus.Ringing,
-  SignalStatus.Snoozed,
-]);
-
-function canMoveExistingMark(status: MarkInstanceStatus) {
-  return (
-    status === MarkInstanceStatus.Planned ||
-    status === MarkInstanceStatus.Ready ||
-    status === MarkInstanceStatus.Blocked
-  );
-}
-
-function buildFloatingDateTime(localDate: string, time: string) {
-  return `${localDate}T${time}:00.000`;
-}
-
-function addMinutesToTime(time: string, minutesToAdd: number) {
-  const [hourText, minuteText] = time.split(":");
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return undefined;
-  }
-
-  const totalMinutes = hour * 60 + minute + minutesToAdd;
-  const nextHour = Math.floor((totalMinutes % 1440) / 60);
-  const nextMinute = totalMinutes % 60;
-  return `${String(nextHour).padStart(2, "0")}:${String(nextMinute).padStart(2, "0")}`;
-}
-
-async function updateMovableSignalsForMark(app: WaymarkAppServices, markId: string, scheduledAt: string) {
-  const signals = await app.repositories.signals.listSignalsByTarget(SignalTargetType.MarkInstance, markId);
-  await Promise.all(
-    signals
-      .filter((signal) => WEEKLY_MOVE_SIGNAL_STATUSES.has(signal.status))
-      .map((signal) =>
-        app.repositories.signals.updateSignal(signal.id, {
-          scheduledAt,
-          status: SignalStatus.Scheduled,
-          ringingStartedAt: null,
-          snoozedUntil: null,
-        }),
-      ),
-  );
 }

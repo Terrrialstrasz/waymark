@@ -8,6 +8,7 @@ import type {
   MilestoneStatus,
   PackCheckTemplate,
   PathStatus,
+  ProgressionPolicy,
   RecurrenceRuleConfig,
   SignalRuleConfig,
   WorkoutExercisePhase,
@@ -31,6 +32,7 @@ export type SeedEntityType =
 export type SeedOwnership =
   | "system_seed"
   | "system_seed_user_modified"
+  | "remote_primary"
   | "user_created"
   | "generated_instance"
   | "deprecated_seed";
@@ -245,6 +247,7 @@ export type SeedRoutineExerciseConfig = {
   targetDistanceM?: number;
   targetSteps?: number;
   restDurationSec?: number;
+  progressionPolicy?: ProgressionPolicy;
 };
 
 export type SeedCloseTrailRuleConfig = {

@@ -51,6 +51,7 @@ export type TodayCockpitScreenProps = {
   onOpenExpedition?: (expedition: CurrentExpeditionItem) => void;
   onOpenCloseTrail?: () => void;
   onConfirmDailyPlan?: () => void;
+  confirmDailyPlanLoading?: boolean;
   withShell?: boolean;
 };
 
@@ -69,6 +70,7 @@ export function TodayCockpitScreen({
   onOpenExpedition,
   onOpenCloseTrail,
   onConfirmDailyPlan,
+  confirmDailyPlanLoading = false,
   withShell = true,
 }: TodayCockpitScreenProps) {
   const c = useCopy(locale);
@@ -119,7 +121,9 @@ export function TodayCockpitScreen({
 
         {isReplanMode ? (
           <WMButton
+            disabled={confirmDailyPlanLoading}
             label={locale === "vi" ? "Xác nhận kế hoạch hôm nay" : "Confirm Today’s Plan"}
+            loading={confirmDailyPlanLoading}
             onPress={onConfirmDailyPlan}
             variant="primary"
           />

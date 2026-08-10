@@ -40,6 +40,7 @@ export type WeeklyTimetableImportInput = {
   origin?: WeekPlanItemOrigin;
   importBatchId?: string;
   items: WeeklyTimetableImportSlotInput[];
+  allowTitleRefs?: boolean;
   setMarkDueAt?: boolean;
 };
 
@@ -187,9 +188,20 @@ async function normalizeImportSlots(
 
   const normalized: NormalizedImportSlot[] = [];
   for (const [index, raw] of input.items.entries()) {
+    if (!input.allowTitleRefs) {
+      if (!raw.pathId) {
+        throw new Error(`pathId is required for slot "${raw.title}". Title-based path resolution is disabled.`);
+      }
+      if (raw.expeditionRef && !raw.expeditionId) {
+        throw new Error(`expeditionId is required for slot "${raw.title}". Title-based expedition resolution is disabled.`);
+      }
+      if (raw.milestoneRef && !raw.milestoneId) {
+        throw new Error(`milestoneId is required for slot "${raw.title}". Title-based milestone resolution is disabled.`);
+      }
+    }
     const path =
       (raw.pathId ? paths.find((item) => item.id === raw.pathId) : undefined) ??
-      (raw.pathRef
+      (input.allowTitleRefs && raw.pathRef
         ? paths.find(
             (item) =>
               normalizeText(item.title).toLowerCase() === normalizeText(raw.pathRef!).toLowerCase() ||
@@ -215,11 +227,11 @@ async function normalizeImportSlots(
 
     const expeditions = await getExpeditions(path.id);
     const expeditionById = raw.expeditionId ? expeditions.find((item) => item.id === raw.expeditionId) : undefined;
-    const expeditionByRef = raw.expeditionRef
+    const expeditionByRef = input.allowTitleRefs && raw.expeditionRef
       ? expeditions.find((item) => normalizeText(item.title).toLowerCase() === normalizeText(raw.expeditionRef!).toLowerCase())
       : undefined;
     const expedition = expeditionById ?? expeditionByRef;
-    if (raw.expeditionId && !expeditionById && !expeditionByRef) {
+    if (raw.expeditionId && !expeditionById && !input.allowTitleRefs) {
       throw new Error(`Unknown expeditionId "${raw.expeditionId}" for slot "${raw.title}".`);
     }
 
@@ -233,10 +245,10 @@ async function normalizeImportSlots(
     const milestoneId =
       milestoneIdFromInput ??
       (await resolveMilestoneIdForUser(repos, input.userId, expedition?.id, raw.milestoneRef, template?.id));
-    if (raw.milestoneId && !expedition?.id) {
+    if (raw.milestoneId && !expedition?.id && !input.allowTitleRefs) {
       throw new Error(`milestoneId "${raw.milestoneId}" requires a valid expedition for slot "${raw.title}".`);
     }
-    if (raw.milestoneId && expedition?.id && !milestoneIdFromInput && !milestoneId) {
+    if (raw.milestoneId && expedition?.id && !milestoneIdFromInput && !milestoneId && !input.allowTitleRefs) {
         throw new Error(
           `milestoneId "${raw.milestoneId}" does not belong to expedition "${expedition.id}" for slot "${raw.title}".`,
         );

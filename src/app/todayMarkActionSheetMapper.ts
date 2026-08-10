@@ -50,15 +50,42 @@ export function mapTodayMarkToActionSheetMark(
       id: item.pathId,
       label: pathLabel,
       theme: fallbackThemes[item.pathId],
+      entityId: item.pathEntityId,
     },
+    expedition: item.expeditionId
+      ? {
+          id: item.expeditionId,
+          label: actionSheet?.expeditionLabel?.[locale] ?? item.expeditionId,
+        }
+      : undefined,
+    milestone: item.milestoneId
+      ? {
+          id: item.milestoneId,
+          label: actionSheet?.milestoneLabel?.[locale] ?? item.milestoneId,
+        }
+      : undefined,
     periodLabel: actionSheet?.periodLabel?.[locale],
     timeLabel: item.timeLabel?.[locale],
     expeditionLabel: actionSheet?.expeditionLabel?.[locale],
     intentionText: actionSheet?.intentionText?.[locale] ?? item.summary?.[locale],
+    markNote: actionSheet?.markNote?.[locale],
     signalLabel: actionSheet?.signalLabel?.[locale],
     onOpenSignal: actionSheet?.signalLabel && handlers?.openSignal ? () => handlers.openSignal?.(item.id) : undefined,
     dependencies: mapDependencies(actionSheet?.dependencies, locale, handlers),
     relatedPackChecks: mapRelatedPackChecks(actionSheet?.relatedPackChecks, locale, handlers),
+    launchConfig: actionSheet?.launchConfig
+      ? {
+          kind: actionSheet.launchConfig.kind,
+          defaultOptionId: actionSheet.launchConfig.defaultOptionId,
+          options: actionSheet.launchConfig.options.map((option) => ({
+            id: option.id,
+            title: option.title[locale],
+            detail: option.detail?.[locale],
+            routineTemplateId: option.routineTemplateId,
+            isDefault: option.isDefault,
+          })),
+        }
+      : undefined,
     checklist: actionSheet?.embeddedChecklist
       ? {
           packCheckId: actionSheet.embeddedChecklist.packCheckId,

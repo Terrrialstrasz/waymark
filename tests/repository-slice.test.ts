@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createSQLiteRepositoryProvider } from "../src/db/adapters";
 import { applyMigrationsAsync } from "../src/db/migrations/runner";
@@ -23,6 +23,7 @@ import {
   MilestoneStatus,
   PackCheckInstanceStatus,
   PathStatus,
+  ProgressionPolicyType,
   RecurrenceKind,
   SessionExerciseStatus,
   SignalStatus,
@@ -51,8 +52,10 @@ import {
   getMarkMetadata,
   getMarkTemplateSeedMetadata,
   getSignalBehavior,
+  findSeedRecordBySource,
   listHealthMeasurements,
   listSeedRecords,
+  saveSeedRecord,
   listSignalConfigs,
   listDisciplineProofsByTrailDay,
   loadPackCheckDetailReadModel,
@@ -109,8 +112,9 @@ import {
 } from "../src/app/sampleWeeklyTimetableImport";
 import { materializeRuntimeForDate } from "../src/app/runtimeLifecycle";
 import { runWaymarkVaultBootGateAsync } from "../src/app/waymarkVaultBootGate";
-import { loadTodayData } from "../src/app/todayDataLoader";
-import { buildExpeditionDetailModel } from "../src/app/expeditionDetailModel";
+import { buildGolfPracticeLaunchConfig, buildHealthWorkoutLaunchConfig, loadTodayData } from "../src/app/todayDataLoader";
+import { buildExpeditionDetailModel, groupExpeditionMarksByMilestone } from "../src/app/expeditionDetailModel";
+import { loadWorkoutReviewData } from "../src/app/workoutReviewDataLoader";
 import { PACK_CHECK_CATALOG } from "../src/config/packCheckCatalog";
 import { runPostMigrationBackfillsAsync } from "../src/db/migrations/postMigrationBackfills";
 import { resolveSelectedDisciplines } from "../src/components/close-trail/model";
@@ -194,12 +198,22 @@ async function createPathAndTrailDay(harness: Awaited<ReturnType<typeof createHa
 }
 
 async function bootstrapFullConfig(harness: Awaited<ReturnType<typeof createHarness>>, userId = "user_1") {
-  return bootstrapWaymarkMap({ repositories: harness.repos, userId }, WAYMARK_MAP_CONFIG, {
+  const report = await bootstrapWaymarkMap({ repositories: harness.repos, userId }, WAYMARK_MAP_CONFIG, {
     mode: "development",
     includeDevDemoSeed: true,
     includeBlockedUserOwnedSeed: true,
+    allowHierarchySeedCreation: true,
   });
+  const records = await listSeedRecords(harness.repos.appSettings, userId);
+  for (const record of records) {
+    if (record.entityType === "path" || record.entityType === "expedition" || record.entityType === "milestone") {
+      await saveSeedRecord(harness.repos.appSettings, userId, { ...record, ownership: "remote_primary" });
+    }
+  }
+  return report;
 }
+
+const TEST_HIERARCHY_SEED_POLICY = { allowHierarchySeedCreation: true } as const;
 
 function createShellAdapter(
   harness: Awaited<ReturnType<typeof createHarness>>,
@@ -274,6 +288,7 @@ async function importApprovedWeeklyTimetable(
     weekEndDate: "2026-06-07",
     note: "Approved weekly timetable import",
     importBatchId: "weekly_import_2026_05_25_fixture",
+    allowTitleRefs: true,
     items: WEEKLY_TIMETABLE_IMPORT_FIXTURE,
   });
 }
@@ -562,6 +577,7 @@ const tests: TestCase[] = [
         await bootstrapWaymarkMap(
           { repositories: harness.repos, userId: "user_1" },
           { version: 1, paths: [{ sourceSeedId: "family", slug: "family", title: "Family", sortOrder: 0 }] },
+          TEST_HIERARCHY_SEED_POLICY,
         );
 
         assert.deepEqual(events, ["restore", "seed"]);
@@ -616,6 +632,7 @@ const tests: TestCase[] = [
               },
             ],
           },
+          TEST_HIERARCHY_SEED_POLICY,
         );
 
         const seedRecords = await listSeedRecords(harness.repos.appSettings, "user_1");
@@ -4712,6 +4729,14 @@ const tests: TestCase[] = [
             expectDuration: 120,
           },
           {
+            slug: "home-workout-plank",
+            title: "Home Workout Plank",
+            targetType: ExerciseTargetType.Timed,
+            currentState: { currentTargetDurationSec: 60, currentTargetSets: 1, successCountSinceProgression: 0 },
+            logs: [{ actualDurationSec: 60, completed: true }],
+            expectDuration: 60,
+          },
+          {
             slug: "kneeling-ab-wheel-rollout",
             title: "Kneeling Ab Wheel Rollout",
             targetType: ExerciseTargetType.RepsOnly,
@@ -4772,6 +4797,27 @@ const tests: TestCase[] = [
               updatedAt: new Date().toISOString(),
             },
             exerciseDefinition: exercise,
+            routineExerciseTemplate:
+              item.slug === "home-workout-plank" ?
+                {
+                  id: "routine_exercise_home_workout_plank",
+                  workoutRoutineTemplateId: "routine_home_workout",
+                  exerciseDefinitionId: exercise.id,
+                  phase: WorkoutExercisePhase.Strength,
+                  orderIndex: 3,
+                  targetType: ExerciseTargetType.Timed,
+                  targetDurationSec: 50,
+                  targetSets: 1,
+                  progressionPolicy: {
+                    type: ProgressionPolicyType.TimeIncrease,
+                    durationIncrementSec: 1,
+                    durationCeilingSec: 60,
+                    successfulSessionsRequired: 1,
+                  },
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                }
+              : undefined,
             acceptForProgression: true,
           });
 
@@ -5866,6 +5912,118 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "Runtime bootstrap adopts pulled hierarchy without creating hierarchy rows",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const path = await harness.repos.paths.createPath({
+          userId: "user_1",
+          slug: "career",
+          title: "Career from Turso",
+          status: PathStatus.Active,
+          sortOrder: 0,
+        });
+        const expedition = await harness.repos.expeditions.createExpedition({
+          userId: "user_1",
+          pathId: path.id,
+          title: "Canonical expedition",
+          status: ExpeditionStatus.Active,
+          sortOrder: 0,
+        });
+        const milestone = await harness.repos.expeditions.createMilestone({
+          userId: "user_1",
+          expeditionId: expedition.id,
+          title: "Canonical milestone",
+          status: MilestoneStatus.Active,
+          sortOrder: 0,
+          orderIndex: 0,
+        });
+
+        const report = await bootstrapWaymarkMap(
+          { repositories: harness.repos, userId: "user_1" },
+          {
+            version: 1,
+            paths: [{ sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 }],
+            expeditions: [
+              {
+                sourceSeedId: "career.canonical",
+                pathSeedId: "career",
+                title: "Canonical expedition",
+                status: ExpeditionStatus.Active,
+                sortOrder: 0,
+              },
+            ],
+            milestones: [
+              {
+                sourceSeedId: "career.canonical.milestone",
+                expeditionSeedId: "career.canonical",
+                title: "Canonical milestone",
+                status: MilestoneStatus.Active,
+                sortOrder: 0,
+                orderIndex: 0,
+              },
+            ],
+          },
+        );
+
+        assert.equal(report.created.length, 0);
+        assert.equal((await harness.repos.paths.listActivePaths("user_1")).length, 1);
+        assert.equal((await harness.repos.expeditions.listExpeditionsByPath(path.id)).items.length, 1);
+        assert.equal((await harness.repos.expeditions.listMilestonesByExpedition(expedition.id)).length, 1);
+        const hierarchyRecords = (await listSeedRecords(harness.repos.appSettings, "user_1")).filter((record) =>
+          ["path", "expedition", "milestone"].includes(record.entityType),
+        );
+        assert.deepEqual(
+          hierarchyRecords
+            .sort((left, right) => left.sourceSeedId.localeCompare(right.sourceSeedId))
+            .map((record) => [record.sourceSeedId, record.entityId, record.ownership]),
+          [
+            ["career", path.id, "remote_primary"],
+            ["career.canonical", expedition.id, "remote_primary"],
+            ["career.canonical.milestone", milestone.id, "remote_primary"],
+          ],
+        );
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Runtime bootstrap rejects duplicate pulled hierarchy before writing seed state",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        for (const suffix of ["one", "two"]) {
+          await harness.repos.paths.createPath({
+            userId: "user_1",
+            slug: "health-body",
+            title: `Health & Body ${suffix}`,
+            status: PathStatus.Active,
+            sortOrder: 0,
+          });
+        }
+
+        await assert.rejects(
+          () =>
+            bootstrapWaymarkMap(
+              { repositories: harness.repos, userId: "user_1" },
+              {
+                version: 1,
+                paths: [{ sourceSeedId: "health", slug: "health-body", title: "Health & Body", sortOrder: 0 }],
+              },
+            ),
+          /Pull Catalog & Hierarchy/,
+        );
+
+        assert.equal((await harness.repos.paths.listActivePaths("user_1")).length, 2);
+        assert.equal((await listSeedRecords(harness.repos.appSettings, "user_1")).length, 0);
+        assert.equal(await harness.repos.appSettings.getSetting("user_1", "waymark.bootstrap.version"), null);
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
     name: "Bootstrap re-run is idempotent and removed seed paths are deprecated not hard deleted",
     run: async () => {
       const harness = await createHarness();
@@ -5876,6 +6034,7 @@ const tests: TestCase[] = [
             version: 1,
             paths: [{ sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 }],
           },
+          TEST_HIERARCHY_SEED_POLICY,
         );
         assert.equal(first.created.length, 1);
         assert.equal((await harness.repos.paths.listActivePaths("user_1")).length, 1);
@@ -5886,6 +6045,7 @@ const tests: TestCase[] = [
             version: 1,
             paths: [{ sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 }],
           },
+          TEST_HIERARCHY_SEED_POLICY,
         );
         assert.equal(second.created.length, 0);
         assert.equal((await harness.repos.paths.listActivePaths("user_1")).length, 1);
@@ -5896,6 +6056,7 @@ const tests: TestCase[] = [
         const removed = await bootstrapWaymarkMap(
           { repositories: harness.repos, userId: "user_1" },
           { version: 2, paths: [] },
+          TEST_HIERARCHY_SEED_POLICY,
         );
         assert.equal(removed.deprecated.length, 1);
         const archived = await harness.repos.paths.getPathById(activePath!.id);
@@ -5916,6 +6077,7 @@ const tests: TestCase[] = [
             version: 1,
             paths: [{ sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 }],
           },
+          TEST_HIERARCHY_SEED_POLICY,
         );
         const path = (await harness.repos.paths.listActivePaths("user_1"))[0]!;
         const edited = await harness.repos.paths.updatePath(path.id, { title: "Career Custom" });
@@ -5927,6 +6089,7 @@ const tests: TestCase[] = [
             version: 2,
             paths: [{ sourceSeedId: "career", slug: "career", title: "Career Seed Changed", sortOrder: 0 }],
           },
+          TEST_HIERARCHY_SEED_POLICY,
         );
 
         const preserved = await harness.repos.paths.getPathById(path.id);
@@ -6318,111 +6481,6 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "Bootstrap seeds the required expedition and milestone master table without duplicates",
-    run: async () => {
-      const harness = await createHarness();
-      try {
-        const expected = [
-          {
-            path: "Career",
-            expedition: "SCH Smart Counter Hub Project",
-            milestones: [
-              ["Phát hànhThẻ GNQT — Ghép luồng Onboarding", "2026-06-20"],
-              ["OBD Thẻ GNQT — Quản lý sự đồng ý của KH", "2026-07-31"],
-              ["GD tài chính thẻ tín dụng — Thu nợ & điều chỉnh thu nợ", "2026-08-31"],
-              ["Điều chỉnh hạn mức giao dịch thẻ theo kỳ sao kê — đợt tháng 8", "2026-08-31"],
-              ["Tự động lập Biểu mẫu QLSD Thẻ", "2026-08-31"],
-              ["Xác nhận 20 tính năng QLSD thẻ trên SMB", "2026-08-31"],
-              ["Điều chỉnh hạn mức giao dịch thẻ theo kỳ sao kê — đợt tháng 9", "2026-09-30"],
-              ["Card Art — Phát hành lại và gia hạn thẻ", "2026-09-30"],
-              ["Đổi nguồn tiền giao dịch JCB HB & QLSD thay đổi nguồn tiền", "2026-09-30"],
-              ["QLSD thẻ GNND theo dự án Cortex", "2026-10-31"],
-              ["Phát hành thẻ GNND theo dự án Cortex", "2026-10-31"],
-              ["PHT ghi nợ quốc tế/nội địa", "2026-10-31"],
-              ["Gia hạn thẻ theo lô", "2026-10-31"],
-              ["PHT tín dụng cá nhân/Hybrid — đã có HMTD & HMTD 0 đồng", "2026-11-30"],
-              ["PHT Hybrid chưa có HMTD — bổ sung lựa chọn Card Art", "2026-11-30"],
-              ["Thẻ trả trước quốc tế vô danh theo lô", "2026-11-30"],
-              ["GD lãi/phí thẻ — thu và hủy", "2026-12-31"],
-            ],
-          },
-          {
-            path: "SNAG Golf Vietnam",
-            expedition: "SNAG Golf Vietnam Growth",
-            milestones: [
-              ["Tạo Dashboard phân tích bài", "2026-06-30"],
-              ["Content foundation", "2026-07-30"],
-            ],
-          },
-          {
-            path: "Family & Home",
-            expedition: "Dạy con Tiếng Anh",
-            milestones: [["Đọc xong sách ngữ pháp tiếng Anh cho con", "2026-07-30"]],
-          },
-          {
-            path: "Family & Home",
-            expedition: "Building Waymark",
-            milestones: [["Xây dựng Waymark Anniversary edition", "2026-06-12"]],
-          },
-          {
-            path: "Family & Home",
-            expedition: "Kế hoạch Du lịch Việt Nam",
-            milestones: [["Ninh Bình tháng 9/2026", "2026-09-01"]],
-          },
-          {
-            path: "Health & Body",
-            expedition: "Cut to 70",
-            milestones: [
-              ["Reach 76kg", "2026-06-30"],
-              ["Reach 75kg", "2026-07-31"],
-              ["Reach 74kg", "2026-08-31"],
-              ["Reach 73kg", "2026-09-30"],
-              ["Reach 72kg", "2026-10-31"],
-              ["Reach 71kg", "2026-11-30"],
-              ["Reach 70kg", "2026-12-31"],
-            ],
-          },
-          {
-            path: "Golf Craft",
-            expedition: "Beginning: From SNAG to 3D Line",
-            milestones: [["Home and SNAG practice phase", "2026-08-15"]],
-          },
-        ] as const;
-
-        await bootstrapFullConfig(harness);
-        await bootstrapFullConfig(harness);
-
-        let expeditionCount = 0;
-        let milestoneCount = 0;
-
-        for (const group of expected) {
-          const path = await getPathByTitle(harness, "user_1", group.path);
-          assert.ok(path);
-
-          const expeditions = (await harness.repos.expeditions.listExpeditionsByPath(path!.id)).items;
-          const expedition = expeditions.find((item) => item.title === group.expedition);
-          assert.ok(expedition);
-          expeditionCount += 1;
-
-          const milestones = await harness.repos.expeditions.listMilestonesByExpedition(expedition!.id);
-          assert.equal(milestones.length, group.milestones.length);
-          milestoneCount += milestones.length;
-
-          for (const [title, deadline] of group.milestones) {
-            const milestone = milestones.find((item) => item.title === title);
-            assert.ok(milestone);
-            assert.equal(milestone?.targetDate, deadline);
-          }
-        }
-
-        assert.equal(expeditionCount, 7);
-        assert.equal(milestoneCount, 30);
-      } finally {
-        harness.close();
-      }
-    },
-  },
-  {
     name: "User-modified seeded Expedition MarkTemplate and PackCheckTemplate are not overwritten",
     run: async () => {
       const harness = await createHarness();
@@ -6571,8 +6629,8 @@ const tests: TestCase[] = [
         assert.equal(grooming.targetMarkInstanceId, undefined);
         assert.equal(leavingHome.targetMarkInstanceId, undefined);
         assert.equal(groomingItems.some((item) => item.label === "Shoes presentable"), true);
-        assert.equal(leavingHomeItems.some((item) => item.label === "Mũ bảo hiểm"), true);
-        assert.equal(leavingHomeItems.some((item) => item.label === "Thẻ cơ quan"), true);
+        assert.equal(leavingHomeItems.some((item) => item.label === "M\u0169 b\u1ea3o hi\u1ec3m"), true);
+        assert.equal(leavingHomeItems.some((item) => item.label === "Th\u1ebb c\u01a1 quan"), true);
 
         const signalConfigs = await listSignalConfigs(harness.repos.appSettings, "user_1");
         assert.equal(signalConfigs.some((config) => config.sourceSeedId === "style_grooming_morning_signal"), true);
@@ -6618,7 +6676,7 @@ const tests: TestCase[] = [
           {
             id: "pci_stale_weekend_hanoi_item_1",
             packCheckInstanceId: instance.id,
-            label: "Đã xác nhận điểm đến",
+            label: "\u0110\u00e3 x\u00e1c nh\u1eadn \u0111i\u1ec3m \u0111\u1ebfn",
             isRequired: true,
             isChecked: false,
             orderIndex: 0,
@@ -7157,7 +7215,7 @@ const tests: TestCase[] = [
         );
         assert.deepEqual(
           report.repaired.map((item) => item.sourceSeedId),
-          ["health_day_a_routine", "health_day_b_routine"],
+          ["health_day_a_routine", "health_day_b_routine", "health_bodyweight_rep_progress_routine"],
         );
         assert.equal((await harness.repos.strength.getRoutineById(dayARoutine!.id))?.title, "Day A1 Strength");
         const repairedExercises = await harness.repos.strength.listRoutineExercises(dayARoutine!.id);
@@ -7274,6 +7332,371 @@ const tests: TestCase[] = [
           assert.equal(readModel.uiSession.exerciseCountLabel, `${expectedStrengthTitles.length} exercises`);
           assert.equal(readModel.uiSession.stretchCountLabel, "14 stretches");
         }
+
+        await markEngine.generateMarkInstancesForDate("user_1", "2026-08-12");
+        const homeWorkoutMarks = await harness.repos.marks.listMarkInstancesByDate("user_1", "2026-08-12");
+        const healthPath = await getPathByTitle(harness, "user_1", "Health & Body");
+        assert.ok(healthPath);
+        const homeWorkoutMark = homeWorkoutMarks.find((mark) => mark.pathId === healthPath!.id && mark.title === "Home Workout");
+        assert.ok(homeWorkoutMark);
+
+        await sessionEngine.startWorkoutSession({ markInstanceId: homeWorkoutMark!.id });
+        const homeReadModel = await loadStrengthSessionReadModel(shell, homeWorkoutMark!.id, "en");
+        assert.equal(homeReadModel.status, "ready");
+        if (homeReadModel.status === "ready") {
+          assert.equal(homeReadModel.uiSession.dayType, "bodyweight_rep_progress");
+          assert.equal(homeReadModel.uiSession.dayLabel, "Home Workout");
+          assert.deepEqual(
+            homeReadModel.uiSession.exercises.map((exercise) => exercise.title.en),
+            [
+              "Push-up",
+              "Side Plank Rotation — Left",
+              "Side Plank Rotation — Right",
+              "Plank",
+              "Burpee",
+              "Inverted Row",
+            ],
+          );
+          assert.deepEqual(
+            homeReadModel.uiSession.exercises.map((exercise) => exercise.targetValue),
+            [10, 5, 5, 50, 10, 12],
+          );
+          const bodyweightRoutineExercises = await harness.repos.strength.listRoutineExercises(homeReadModel.session.routineTemplateId);
+          const bodyweightStrengthExercises = bodyweightRoutineExercises
+            .filter((exercise) => exercise.phase === WorkoutExercisePhase.Strength)
+            .sort((left, right) => left.orderIndex - right.orderIndex);
+          assert.deepEqual(
+            bodyweightStrengthExercises.map((exercise) => ({
+              targetType: exercise.targetType,
+              targetReps: exercise.targetReps,
+              targetDurationSec: exercise.targetDurationSec,
+              targetSets: exercise.targetSets,
+              progressionPolicy: exercise.progressionPolicy,
+            })),
+            [
+              {
+                targetType: ExerciseTargetType.RepsOnly,
+                targetReps: 10,
+                targetDurationSec: undefined,
+                targetSets: 1,
+                progressionPolicy: undefined,
+              },
+              {
+                targetType: ExerciseTargetType.RepsOnly,
+                targetReps: 5,
+                targetDurationSec: undefined,
+                targetSets: 1,
+                progressionPolicy: {
+                  type: ProgressionPolicyType.FixedIncrement,
+                  repIncrement: 1,
+                  repCeiling: 12,
+                  successfulSessionsRequired: 1,
+                },
+              },
+              {
+                targetType: ExerciseTargetType.RepsOnly,
+                targetReps: 5,
+                targetDurationSec: undefined,
+                targetSets: 1,
+                progressionPolicy: {
+                  type: ProgressionPolicyType.FixedIncrement,
+                  repIncrement: 1,
+                  repCeiling: 12,
+                  successfulSessionsRequired: 1,
+                },
+              },
+              {
+                targetType: ExerciseTargetType.Timed,
+                targetReps: undefined,
+                targetDurationSec: 50,
+                targetSets: 1,
+                progressionPolicy: {
+                  type: ProgressionPolicyType.TimeIncrease,
+                  durationIncrementSec: 1,
+                  durationCeilingSec: 60,
+                  successfulSessionsRequired: 1,
+                },
+              },
+              {
+                targetType: ExerciseTargetType.RepsOnly,
+                targetReps: 10,
+                targetDurationSec: undefined,
+                targetSets: 1,
+                progressionPolicy: {
+                  type: ProgressionPolicyType.FixedIncrement,
+                  repIncrement: 1,
+                  repCeiling: 25,
+                  successfulSessionsRequired: 1,
+                },
+              },
+              {
+                targetType: ExerciseTargetType.RepsOnly,
+                targetReps: 12,
+                targetDurationSec: undefined,
+                targetSets: 1,
+                progressionPolicy: {
+                  type: ProgressionPolicyType.FixedIncrement,
+                  repIncrement: 1,
+                  repCeiling: 20,
+                  successfulSessionsRequired: 1,
+                },
+              },
+            ],
+          );
+          assert.deepEqual(
+            homeReadModel.uiSession.stretches.map((stretch) => stretch.title.en),
+            expectedCooldown,
+          );
+          assert.equal(homeReadModel.uiSession.exerciseCountLabel, "6 exercises");
+          assert.equal(homeReadModel.uiSession.stretchCountLabel, "14 stretches");
+        }
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Workout Minimal weekly review repairs the legacy four-exercise routine before rendering",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        await harness.repos.userProfiles.getOrCreateLocalUserProfile({
+          userId: "user_1",
+          locale: "en-US",
+          timezone: "UTC",
+          weekStartsOn: 1,
+        });
+        await bootstrapFullConfig(harness);
+        const user = await harness.repos.userProfiles.getUserProfileById("user_1");
+        const healthPath = await getPathByTitle(harness, "user_1", "Health & Body");
+        assert.ok(user);
+        assert.ok(healthPath);
+        const bodyweightRoutine = (await harness.repos.strength.listRoutinesByPath(healthPath!.id))
+          .find((routine) => routine.id === "workout_routine_health_bodyweight_rep_progress_routine");
+        assert.ok(bodyweightRoutine);
+
+        const routineExercises = await harness.repos.strength.listRoutineExercises(bodyweightRoutine!.id);
+        const exerciseEntries = await Promise.all(routineExercises.map(async (exercise) => ({
+          exercise,
+          definition: await harness.repos.strength.getExerciseDefinitionById(exercise.exerciseDefinitionId),
+        })));
+        const byTitle = new Map(exerciseEntries.map((entry) => [entry.definition?.title, entry.exercise] as const));
+        const legacyStrength = [
+          { exercise: byTitle.get("Push-up")!, orderIndex: 0, targetReps: 10 },
+          { exercise: byTitle.get("Burpee")!, orderIndex: 1, targetReps: 15 },
+          { exercise: byTitle.get("Inverted Row")!, orderIndex: 2, targetReps: 20 },
+          { exercise: byTitle.get("Plank")!, orderIndex: 3, targetReps: undefined },
+        ];
+        assert.equal(legacyStrength.every((entry) => Boolean(entry.exercise)), true);
+        const cooldown = routineExercises.filter((exercise) => exercise.phase !== WorkoutExercisePhase.Strength);
+        await harness.repos.strength.softDeleteRoutineExercisesExcept(
+          bodyweightRoutine!.id,
+          [...legacyStrength.map((entry) => entry.exercise.id), ...cooldown.map((exercise) => exercise.id)],
+        );
+        await harness.repos.strength.upsertRoutineExercises(legacyStrength.map((entry) => ({
+          ...entry.exercise,
+          orderIndex: entry.orderIndex,
+          targetReps: entry.targetReps,
+          progressionPolicy: undefined,
+        })));
+        await harness.repos.strength.upsertRoutine({
+          ...bodyweightRoutine!,
+          title: "Body weight rep progress",
+        });
+        await markSeedRecordUserModified(
+          harness.repos.appSettings,
+          "user_1",
+          "workout_routine",
+          bodyweightRoutine!.id,
+          "2026-08-09T06:00:00.000Z",
+        );
+
+        const trailDay = await harness.repos.trailDays.getOrCreateTrailDay("user_1", "2026-08-10");
+        const mark = await createMark(harness, {
+          localDate: "2026-08-10",
+          pathId: healthPath!.id,
+          trailDayId: trailDay.id,
+          title: "Workout Minimal",
+          templateId: bodyweightRoutine!.markTemplateId,
+        });
+        const services = {
+          ...createShellAdapter(harness, user!),
+          closeTrailEngine: createCloseTrailEngine(harness.repos),
+          strengthProgressionService: createStrengthProgressionService(harness.repos),
+          strengthSessionEngine: createStrengthSessionEngine(harness.repos),
+        };
+        const review = await loadWorkoutReviewData(services, mark.id, "en", bodyweightRoutine!.id);
+        assert.ok(review);
+        assert.equal(review?.routineTitle, "Home Workout");
+        assert.deepEqual(
+          review?.exercises.filter((exercise) => exercise.phase === "main").map((exercise) => [exercise.title, exercise.prescription]),
+          [
+            ["Push-up", "1 x 10"],
+            ["Side Plank Rotation — Left", "1 x 5"],
+            ["Side Plank Rotation — Right", "1 x 5"],
+            ["Plank", "1 x 50 sec"],
+            ["Burpee", "1 x 10"],
+            ["Inverted Row", "1 x 12"],
+          ],
+        );
+        assert.equal(await harness.repos.strength.getSessionByMarkInstance(mark.id), null);
+        assert.equal((await harness.repos.marks.getMarkInstanceById(mark.id))?.status, MarkInstanceStatus.Planned);
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Runtime bootstrap upgrades a legacy system_seed record on an exact Turso canonical binding",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const canonicalPathId = "path_mq3pmhk6_6q3e2fvj";
+        await harness.db.runAsync(
+          `INSERT INTO paths (
+             id, user_id, name, slug, title, status, sort_order,
+             created_at, updated_at, deleted_at, sync_status, local_revision
+           ) VALUES (?, 'user_1', 'Career', 'career', 'Career from Turso', 'active', 0, 1, 1, NULL, 'synced', 618);`,
+          canonicalPathId,
+        );
+        await saveSeedRecord(harness.repos.appSettings, "user_1", {
+          entityType: "path",
+          entityId: canonicalPathId,
+          sourceSeedId: "career",
+          seedVersion: 1,
+          lastAppliedSyncVersion: 618,
+          ownership: "system_seed",
+          lastBootstrappedAt: "2026-08-10T00:00:00.000Z",
+        });
+
+        await bootstrapWaymarkMap(
+          { repositories: harness.repos, userId: "user_1" },
+          { version: 2, paths: [{ sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 }] },
+        );
+
+        const record = await findSeedRecordBySource(harness.repos.appSettings, "user_1", "path", "career");
+        assert.equal(record?.entityId, canonicalPathId);
+        assert.equal(record?.ownership, "remote_primary");
+        assert.equal((await harness.repos.paths.listActivePaths("user_1")).length, 1);
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Runtime bootstrap upgrades unbound legacy hierarchy only behind the completed-pull trust boundary",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const path = await harness.repos.paths.createPath({
+          userId: "user_1",
+          slug: "legacy-remote",
+          title: "Legacy remote path",
+          status: PathStatus.Active,
+          sortOrder: 0,
+        });
+        await saveSeedRecord(harness.repos.appSettings, "user_1", {
+          entityType: "path",
+          entityId: path.id,
+          sourceSeedId: "legacy.remote",
+          seedVersion: 1,
+          lastAppliedSyncVersion: 1,
+          ownership: "system_seed",
+          lastBootstrappedAt: "2026-08-10T00:00:00.000Z",
+        });
+        const config = {
+          version: 2,
+          paths: [{ sourceSeedId: "legacy.remote", slug: "legacy-remote", title: "Legacy remote path", sortOrder: 0 }],
+        };
+
+        await assert.rejects(
+          bootstrapWaymarkMap({ repositories: harness.repos, userId: "user_1" }, config),
+          /pulled canonical row required/,
+        );
+        await bootstrapWaymarkMap(
+          { repositories: harness.repos, userId: "user_1" },
+          config,
+          { trustExistingPulledHierarchy: true },
+        );
+
+        const record = await findSeedRecordBySource(harness.repos.appSettings, "user_1", "path", "legacy.remote");
+        assert.equal(record?.entityId, path.id);
+        assert.equal(record?.ownership, "remote_primary");
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Golf routines link one-to-one to mark templates and place the planned routine first",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        await harness.repos.userProfiles.getOrCreateLocalUserProfile({
+          userId: "user_1",
+          locale: "en-US",
+          timezone: "UTC",
+          weekStartsOn: 1,
+        });
+        await bootstrapFullConfig(harness);
+        const user = await harness.repos.userProfiles.getUserProfileById("user_1");
+        const golfPath = await getPathByTitle(harness, "user_1", "Golf Craft");
+        const healthPath = await getPathByTitle(harness, "user_1", "Health & Body");
+        assert.ok(user);
+        assert.ok(golfPath);
+        assert.ok(healthPath);
+
+        const services = {
+          ...createShellAdapter(harness, user!),
+          closeTrailEngine: createCloseTrailEngine(harness.repos),
+          strengthProgressionService: createStrengthProgressionService(harness.repos),
+          strengthSessionEngine: createStrengthSessionEngine(harness.repos),
+        };
+        const golfRoutines = (await harness.repos.strength.listRoutinesByPath(golfPath!.id))
+          .filter((routine) => routine.routineType === WorkoutRoutineType.GolfPractice);
+        assert.equal(golfRoutines.length, 19);
+        assert.equal(golfRoutines.every((routine) => Boolean(routine.markTemplateId)), true);
+        assert.equal(new Set(golfRoutines.map((routine) => routine.markTemplateId)).size, golfRoutines.length);
+
+        const chipping3m = golfRoutines.find((routine) => routine.title === "Golf Practice Chipping 3 m");
+        assert.ok(chipping3m?.markTemplateId);
+        const chippingMark = await createMark(harness, {
+          localDate: "2026-08-10",
+          pathId: golfPath!.id,
+          trailDayId: (await harness.repos.trailDays.getOrCreateTrailDay("user_1", "2026-08-10")).id,
+          title: "Chipping 3 m â€” Landing Zone",
+          templateId: chipping3m!.markTemplateId,
+        });
+        const chippingLaunch = await buildGolfPracticeLaunchConfig(services, chippingMark);
+        assert.equal(chippingLaunch?.defaultOptionId, chipping3m!.id);
+        assert.equal(chippingLaunch?.options[0]?.id, chipping3m!.id);
+        assert.equal(chippingLaunch?.options[0]?.isDefault, true);
+
+        const chipping7m = golfRoutines.find((routine) => routine.title === "Golf Practice Chipping 7 m");
+        assert.ok(chipping7m);
+        const legacyChippingMark = await createMark(harness, {
+          localDate: "2026-08-14",
+          pathId: golfPath!.id,
+          trailDayId: (await harness.repos.trailDays.getOrCreateTrailDay("user_1", "2026-08-14")).id,
+          title: "Chipping 7 m â€” Hit Flagsticky",
+        });
+        const legacyChippingLaunch = await buildGolfPracticeLaunchConfig(services, legacyChippingMark);
+        assert.equal(legacyChippingLaunch?.defaultOptionId, chipping7m!.id);
+        assert.equal(legacyChippingLaunch?.options[0]?.id, chipping7m!.id);
+
+        const bodyweightRoutine = (await harness.repos.strength.listRoutinesByPath(healthPath!.id))
+          .find((routine) => routine.title === "Home Workout");
+        assert.ok(bodyweightRoutine?.markTemplateId);
+        const workoutMark = await createMark(harness, {
+          localDate: "2026-08-10",
+          pathId: healthPath!.id,
+          trailDayId: (await harness.repos.trailDays.getOrCreateTrailDay("user_1", "2026-08-10")).id,
+          title: "Workout Minimal",
+          templateId: bodyweightRoutine!.markTemplateId,
+        });
+        const workoutLaunch = await buildHealthWorkoutLaunchConfig(services, workoutMark);
+        assert.equal(workoutLaunch?.defaultOptionId, bodyweightRoutine!.id);
+        assert.equal(workoutLaunch?.options[0]?.id, bodyweightRoutine!.id);
       } finally {
         harness.close();
       }
@@ -7317,9 +7740,9 @@ const tests: TestCase[] = [
         await packCheckEngine.generatePackCheckInstancesForDate("user_1", "2026-05-22");
         const marks0522 = await markEngine.listVisibleMarksForDay("user_1", "2026-05-22");
         const focusTitles = [
-          "Viết RSD Template xác nhận giao dịch QLSD Thẻ trên SMB",
-          "Viết RSD API vấn tin chi tiết giao dịch QLSD Thẻ trên SCH",
-          "Buffer hoàn thiện 2 RSD ngày 22/05",
+          "Vi\u1ebft RSD Template x\u00e1c nh\u1eadn giao d\u1ecbch QLSD Th\u1ebb tr\u00ean SMB",
+          "Vi\u1ebft RSD API v\u1ea5n tin chi ti\u1ebft giao d\u1ecbch QLSD Th\u1ebb tr\u00ean SCH",
+          "Buffer ho\u00e0n thi\u1ec7n 2 RSD ng\u00e0y 22/05",
         ];
         for (const title of focusTitles) {
           const mark = marks0522.find((item) => item.title === title)!;
@@ -7360,6 +7783,7 @@ const tests: TestCase[] = [
               },
             ],
           },
+          TEST_HIERARCHY_SEED_POLICY,
         );
 
         const recordsBefore = await listSeedRecords(harness.repos.appSettings, "user_1");
@@ -8635,9 +9059,9 @@ const tests: TestCase[] = [
         );
 
         assert.equal(titles.includes("Workout A2"), true);
-        assert.equal(titles.includes("Viết RSD Template xác nhận giao dịch QLSD Thẻ trên SMB"), true);
-        assert.equal(titles.includes("Viết RSD API vấn tin chi tiết giao dịch QLSD Thẻ trên SCH"), true);
-        assert.equal(titles.includes("Buffer hoàn thiện 2 RSD ngày 22/05"), true);
+        assert.equal(titles.includes("Vi\u1ebft RSD Template x\u00e1c nh\u1eadn giao d\u1ecbch QLSD Th\u1ebb tr\u00ean SMB"), true);
+        assert.equal(titles.includes("Vi\u1ebft RSD API v\u1ea5n tin chi ti\u1ebft giao d\u1ecbch QLSD Th\u1ebb tr\u00ean SCH"), true);
+        assert.equal(titles.includes("Buffer ho\u00e0n thi\u1ec7n 2 RSD ng\u00e0y 22/05"), true);
         assert.equal(titles.includes("Family Activity Block"), true);
         assert.equal(packVisibility.today.some((item) => item.title === "Work Task Readiness Check"), false);
         assert.equal(packVisibility.today.some((item) => item.title === "Daily Grooming Presence Check"), true);
@@ -8828,11 +9252,11 @@ const tests: TestCase[] = [
 
         const allMarks = Object.values(marksByDate).flat();
         const careerPath = await getPathByTitle(harness, "user_1", "Career");
-        assert.equal(allMarks.filter((mark) => mark.title === "Viết Testcase — PHT GNQT Luồng KHTC").length, 1);
+        assert.equal(allMarks.filter((mark) => mark.title === "Vi\u1ebft Testcase \u2014 PHT GNQT Lu\u1ed3ng KHTC").length, 1);
         assert.equal(allMarks.some((mark) => /iphone|waymark lite|lite iphone/i.test(mark.title)), false);
         assert.equal(
           (marksByDate["2026-06-06"] ?? []).some(
-            (mark) => mark.pathId === careerPath?.id && /waymark|execute|dữ liệu kỷ niệm/i.test(mark.title),
+            (mark) => mark.pathId === careerPath?.id && /waymark|execute|d? li?u k? ni?m/i.test(mark.title),
           ),
           false,
         );
@@ -8894,12 +9318,12 @@ const tests: TestCase[] = [
             }),
         );
         assert.deepEqual(bodyStartTargets.sort(), [
-          "Di chuyển / chuẩn bị giải Golf Diễn Lâm",
+          "Di chuy\u1ec3n / chu\u1ea9n b\u1ecb gi\u1ea3i Golf Di\u1ec5n L\u00e2m",
           "Workout Day A",
           "Workout Day A",
           "Workout Day B",
           "Workout Day B",
-          "Workout Day A nhẹ / phục hồi",
+          "Workout Day A nh\u1eb9 / ph\u1ee5c h\u1ed3i",
           "Workout Walk",
         ].sort());
 
@@ -8949,11 +9373,11 @@ const tests: TestCase[] = [
         assert.equal(new Set(second.signals.map((signal) => signal.id)).size, 31);
 
         const dch = first.expeditions.find((expedition) => expedition.title === "DCH Deposit Core Hub");
-        const baCore = first.expeditions.find((expedition) => expedition.title === "Transfer kiến thức BA lên Core");
+        const baCore = first.expeditions.find((expedition) => expedition.title === "Transfer ki\u1ebfn th\u1ee9c BA l\u00ean Core");
         assert.equal(dch?.targetDate, "2026-12-30");
         assert.equal(baCore?.targetDate, "2026-12-30");
         assert.equal(first.milestones.find((milestone) => milestone.title === "DCH Sprint 0")?.targetDate, "2026-07-12");
-        assert.equal(first.milestones.find((milestone) => milestone.title === "Quy trình BA và RSD")?.targetDate, "2026-07-12");
+        assert.equal(first.milestones.find((milestone) => milestone.title === "Quy tr\u00ecnh BA v\u00e0 RSD")?.targetDate, "2026-07-12");
 
         const marksByDate = await listMarksByDateMap(harness, "user_1", [
           "2026-06-29",
@@ -8968,10 +9392,10 @@ const tests: TestCase[] = [
         assert.equal(allMarks.length, 56);
         assert.equal(allMarks.every((mark) => mark.origin === MarkInstanceOrigin.WeeklyPlanned), true);
         assert.equal(allMarks.every((mark) => mark.dueAt === undefined), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Thắp hương ngày rằm"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "DCH — Luồng giao dịch rút tiền sub account; luồng giao dịch chuyển tiền nội bộ sub account"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "EPGA support — đưa đón / theo dõi buổi học"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Thi đấu 9 hố ở EPGA — tiếp tục / support"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Th\u1eafp h\u01b0\u01a1ng ng\u00e0y r\u1eb1m"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "DCH \u2014 Lu\u1ed3ng giao d\u1ecbch r\u00fat ti\u1ec1n sub account; lu\u1ed3ng giao d\u1ecbch chuy\u1ec3n ti\u1ec1n n\u1ed9i b\u1ed9 sub account"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "EPGA support \u2014 \u0111\u01b0a \u0111\u00f3n / theo d\u00f5i bu\u1ed5i h\u1ecdc"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Thi \u0111\u1ea5u 9 h\u1ed1 \u1edf EPGA \u2014 ti\u1ebfp t\u1ee5c / support"), true);
 
         const scheduled = await harness.repos.signals.listSignalsByStatus([SignalStatus.Scheduled], { limit: 100 });
         assert.equal(scheduled.items.length, 31);
@@ -9040,10 +9464,10 @@ const tests: TestCase[] = [
         assert.equal(allMarks.length, 56);
         assert.equal(allMarks.every((mark) => mark.origin === MarkInstanceOrigin.WeeklyPlanned), true);
         assert.equal(allMarks.every((mark) => mark.dueAt === undefined), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Waymark — Tích hợp Google Drive"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Waymark — Tích hợp Turso"), true);
-        assert.equal((marksByDate["2026-07-09"] ?? []).some((mark) => mark.title === "Waymark — Tích hợp Google Drive" && mark.scheduledStartAt === "2026-07-09T13:30:00.000"), true);
-        assert.equal((marksByDate["2026-07-10"] ?? []).some((mark) => mark.title === "Waymark — Tích hợp Turso" && mark.scheduledStartAt === "2026-07-10T13:30:00.000"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Waymark \u2014 T\u00edch h\u1ee3p Google Drive"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Waymark \u2014 T\u00edch h\u1ee3p Turso"), true);
+        assert.equal((marksByDate["2026-07-09"] ?? []).some((mark) => mark.title === "Waymark \u2014 T\u00edch h\u1ee3p Google Drive" && mark.scheduledStartAt === "2026-07-09T13:30:00.000"), true);
+        assert.equal((marksByDate["2026-07-10"] ?? []).some((mark) => mark.title === "Waymark \u2014 T\u00edch h\u1ee3p Turso" && mark.scheduledStartAt === "2026-07-10T13:30:00.000"), true);
 
         const scheduled = await harness.repos.signals.listSignalsByStatus([SignalStatus.Scheduled], { limit: 100 });
         assert.equal(scheduled.items.length, 51);
@@ -9069,8 +9493,8 @@ const tests: TestCase[] = [
             return { scheduledAt: signal.scheduledAt, title: mark?.title };
           }),
         );
-        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-09T13:00:00.000Z" && item.title === "Waymark — Tích hợp Google Drive"), true);
-        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-10T13:00:00.000Z" && item.title === "Waymark — Tích hợp Turso"), true);
+        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-09T13:00:00.000Z" && item.title === "Waymark \u2014 T\u00edch h\u1ee3p Google Drive"), true);
+        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-10T13:00:00.000Z" && item.title === "Waymark \u2014 T\u00edch h\u1ee3p Turso"), true);
       } finally {
         harness.close();
       }
@@ -9130,9 +9554,9 @@ const tests: TestCase[] = [
         assert.equal(allMarks.every((mark) => mark.origin === MarkInstanceOrigin.WeeklyPlanned), true);
         assert.equal(allMarks.every((mark) => mark.dueAt === undefined), true);
         assert.equal(allMarks.some((mark) => mark.title === "Planning DCH Sprint 7.2"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Xem quy hoạch Hà Nội 100 năm"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Cắt tóc sau lịch EPGA"), true);
-        assert.equal(allMarks.filter((mark) => mark.title === "Chuẩn bị bữa sáng cho cả nhà").length, 7);
+        assert.equal(allMarks.some((mark) => mark.title === "Xem quy ho\u1ea1ch H\u00e0 N\u1ed9i 100 n\u0103m"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "C\u1eaft t\u00f3c sau l\u1ecbch EPGA"), true);
+        assert.equal(allMarks.filter((mark) => mark.title === "Chu\u1ea9n b\u1ecb b\u1eefa s\u00e1ng cho c\u1ea3 nh\u00e0").length, 7);
 
         assert.equal(allMarks.some((mark) => mark.title === "SNAG Roller Stroke 7h-5h"), true);
         assert.equal(allMarks.some((mark) => mark.title === "SNAG Launcher Chip 8h-4h"), true);
@@ -9255,7 +9679,7 @@ const tests: TestCase[] = [
           localDate: "2026-07-20",
           pathId: healthPath!.id,
           trailDayId: legacyTrailDay.id,
-          title: "Morning Food Intake — Brainfood baseline",
+          title: "Morning Food Intake \u2014 Brainfood baseline",
           origin: MarkInstanceOrigin.WeeklyPlanned,
           status: MarkInstanceStatus.Planned,
           generationKey: "legacy_morning_food_for_cleanup",
@@ -9264,7 +9688,7 @@ const tests: TestCase[] = [
           localDate: "2026-07-20",
           pathId: familyPath!.id,
           trailDayId: legacyTrailDay.id,
-          title: "Chuẩn bị bữa sáng cho cả nhà",
+          title: "Chu\u1ea9n b\u1ecb b\u1eefa s\u00e1ng cho c\u1ea3 nh\u00e0",
           origin: MarkInstanceOrigin.WeeklyPlanned,
           status: MarkInstanceStatus.Planned,
           generationKey: "legacy_family_breakfast_for_cleanup",
@@ -9295,7 +9719,7 @@ const tests: TestCase[] = [
           localDate: "2026-07-21",
           pathId: snagPath!.id,
           trailDayId: legacySnagTrailDay.id,
-          title: "Gắn Google tag website SNAG",
+          title: "G\u1eafn Google tag website SNAG",
           origin: MarkInstanceOrigin.WeeklyPlanned,
           status: MarkInstanceStatus.Planned,
           generationKey: "legacy_google_tag_for_cleanup",
@@ -9315,7 +9739,7 @@ const tests: TestCase[] = [
         assert.equal(await harness.repos.marks.getMarkInstanceById(legacySaturdayMorningMark.id), null);
         assert.equal(await harness.repos.marks.getMarkInstanceById(legacySaturdaySupportMark.id), null);
         assert.equal(await harness.repos.marks.getMarkInstanceById(legacyGoogleTagMark.id), null);
-        assert.equal(first.hierarchyLinks.skipped.some((item) => item.title === "Tạo GA4 cho website SNAG"), true);
+        assert.equal(first.hierarchyLinks.skipped.some((item) => item.title === "T\u1ea1o GA4 cho website SNAG"), true);
 
         const marksByDate = await listMarksByDateMap(harness, "user_1", [
           "2026-07-20",
@@ -9331,50 +9755,50 @@ const tests: TestCase[] = [
         assert.equal(allMarks.every((mark) => mark.origin === MarkInstanceOrigin.WeeklyPlanned), true);
         assert.equal(allMarks.every((mark) => mark.dueAt === undefined), true);
         assert.equal(allMarks.filter((mark) => mark.title === "Weight In").length, 7);
-        assert.equal(allMarks.filter((mark) => mark.title === "Morning Food Intake — Brainfood baseline").length, 0);
-        assert.equal(allMarks.filter((mark) => mark.title === "Chuẩn bị bữa sáng cho cả nhà").length, 0);
+        assert.equal(allMarks.filter((mark) => mark.title === "Morning Food Intake \u2014 Brainfood baseline").length, 0);
+        assert.equal(allMarks.filter((mark) => mark.title === "Chu\u1ea9n b\u1ecb b\u1eefa s\u00e1ng cho c\u1ea3 nh\u00e0").length, 0);
         const postWorkoutRoutineMarks = allMarks.filter((mark) => mark.title === "Post Workout Routine");
         assert.equal(postWorkoutRoutineMarks.length, 5);
         assert.equal(postWorkoutRoutineMarks.every((mark) => mark.scheduledStartAt?.slice(11, 16) === "07:00" && mark.scheduledEndAt?.slice(11, 16) === "07:30"), true);
         assert.equal(postWorkoutRoutineMarks.every((mark) => Boolean(mark.templateId)), true);
-        assert.equal(postWorkoutRoutineMarks.every((mark) => mark.description?.includes("Brainfood") && mark.description?.includes("thắp hương")), true);
+        assert.equal(postWorkoutRoutineMarks.every((mark) => mark.description?.includes("Brainfood") && mark.description?.includes("th\u1eafp h\u01b0\u01a1ng")), true);
         const postWorkoutTemplateMetadata = await getMarkTemplateSeedMetadata(harness.repos.appSettings, "user_1", postWorkoutRoutineMarks[0]!.templateId!);
         assert.deepEqual(postWorkoutTemplateMetadata?.executionChecklistItems, [
-          "Pha sữa Hikid cho con.",
-          "Pha Glucerna cho mẹ.",
-          "Brainfood: ăn 1-2 trứng, uống một cốc trà xanh, kiểm tra tỏi cho bữa trưa hoặc tối.",
-          "Thắp hương buổi sáng: chuẩn bị bàn thờ gọn gàng, thắp hương và dọn lại đồ dùng.",
+          "Pha s\u1eefa Hikid cho con.",
+          "Pha Glucerna cho m\u1eb9.",
+          "Brainfood: \u0103n 1-2 tr\u1ee9ng, u\u1ed1ng m\u1ed9t c\u1ed1c tr\u00e0 xanh, ki\u1ec3m tra t\u1ecfi cho b\u1eefa tr\u01b0a ho\u1eb7c t\u1ed1i.",
+          "Th\u1eafp h\u01b0\u01a1ng bu\u1ed5i s\u00e1ng: chu\u1ea9n b\u1ecb b\u00e0n th\u1edd g\u1ecdn g\u00e0ng, th\u1eafp h\u01b0\u01a1ng v\u00e0 d\u1ecdn l\u1ea1i \u0111\u1ed3 d\u00f9ng.",
         ]);
         const snagContentTitles = new Set([
-          "Tạo GA4 cho website SNAG",
-          "Cập nhật sự kiện golf tháng 5–7",
-          "Lập kế hoạch content đa kênh SNAG",
-          "Thiết kế Mark đăng bài định kỳ",
+          "T\u1ea1o GA4 cho website SNAG",
+          "C\u1eadp nh\u1eadt s\u1ef1 ki\u1ec7n golf th\u00e1ng 5\u20137",
+          "L\u1eadp k\u1ebf ho\u1ea1ch content \u0111a k\u00eanh SNAG",
+          "Thi\u1ebft k\u1ebf Mark \u0111\u0103ng b\u00e0i \u0111\u1ecbnh k\u1ef3",
         ]);
         assert.equal(allMarks.filter((mark) => snagContentTitles.has(mark.title)).length, 4);
-        assert.equal(allMarks.some((mark) => mark.title === "Gắn Google tag website SNAG"), false);
-        assert.equal(allMarks.some((mark) => mark.title === "Cấu hình event GA4 cho SNAG"), false);
-        assert.equal(allMarks.some((mark) => mark.title === "Kiểm thử GA4 website SNAG"), false);
-        assert.equal(allMarks.some((mark) => mark.title === "Cập nhật sự kiện golf tháng 5–7" && mark.description?.includes("lập backlog bài viết")), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Lập kế hoạch content đa kênh SNAG" && mark.description?.includes("ma trận chủ đề")), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Thiết kế Mark đăng bài định kỳ" && mark.description?.includes("lịch Mark định kỳ")), true);
+        assert.equal(allMarks.some((mark) => mark.title === "G\u1eafn Google tag website SNAG"), false);
+        assert.equal(allMarks.some((mark) => mark.title === "C\u1ea5u h\u00ecnh event GA4 cho SNAG"), false);
+        assert.equal(allMarks.some((mark) => mark.title === "Ki\u1ec3m th\u1eed GA4 website SNAG"), false);
+        assert.equal(allMarks.some((mark) => mark.title === "C\u1eadp nh\u1eadt s\u1ef1 ki\u1ec7n golf th\u00e1ng 5\u20137"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "L\u1eadp k\u1ebf ho\u1ea1ch content \u0111a k\u00eanh SNAG"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Thi\u1ebft k\u1ebf Mark \u0111\u0103ng b\u00e0i \u0111\u1ecbnh k\u1ef3"), true);
         assert.equal(allMarks.filter((mark) => mark.title.includes("thu chi GL")).length, 3);
-        assert.equal(allMarks.some((mark) => mark.title === "Viết RSD chi tiền mặt DCH"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Viết test SIT QLSD Thẻ"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Hoàn thiện Backup/Restore Turso"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Hoàn thiện edit hierarchy Turso" && mark.scheduledStartAt === "2026-07-24T08:00:00.000"), true);
-        assert.equal(allMarks.some((mark) => mark.title === "Hoàn thiện Weekly Planning Turso"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Vi\u1ebft RSD chi ti\u1ec1n m\u1eb7t DCH"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Vi\u1ebft test SIT QLSD Th\u1ebb"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Ho\u00e0n thi\u1ec7n Backup/Restore Turso"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Ho\u00e0n thi\u1ec7n edit hierarchy Turso" && mark.scheduledStartAt === "2026-07-24T08:00:00.000"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Ho\u00e0n thi\u1ec7n Weekly Planning Turso"), true);
         assert.equal(allMarks.some((mark) => mark.title === "Waymark Planning"), true);
         assert.equal((marksByDate["2026-07-26"] ?? []).some((mark) => mark.pathId && mark.title.includes("RSD")), false);
         const characterPath = await getPathByTitle(harness, "user_1", "Stoicism & Character");
         assert.ok(characterPath);
         const saturdayMarks = marksByDate["2026-07-25"] ?? [];
         const sundayMarks = marksByDate["2026-07-26"] ?? [];
-        const hospitalCareMarks = [...saturdayMarks, ...sundayMarks].filter((mark) => mark.title === "Trông bố trong viện");
+        const hospitalCareMarks = [...saturdayMarks, ...sundayMarks].filter((mark) => mark.title === "Tr\u00f4ng b\u1ed1 trong vi\u1ec7n");
         assert.equal(hospitalCareMarks.length, 6);
         assert.equal(hospitalCareMarks.every((mark) => mark.pathId === characterPath!.id), true);
         assert.equal(hospitalCareMarks.every((mark) => mark.expeditionId === undefined && mark.milestoneId === undefined), true);
-        assert.equal(hospitalCareMarks.every((mark) => mark.description?.includes("lau vùng hạ bộ") && mark.description?.includes("thay bỉm")), true);
+        assert.equal(hospitalCareMarks.every((mark) => mark.description?.includes("lau v\u00f9ng h\u1ea1 b\u1ed9") && mark.description?.includes("thay b\u1ec9m")), true);
         assert.deepEqual(
           hospitalCareMarks.map((mark) => `${mark.scheduledStartAt?.slice(0, 16)}-${mark.scheduledEndAt?.slice(11, 16)}`).sort(),
           [
@@ -9386,12 +9810,12 @@ const tests: TestCase[] = [
             "2026-07-26T18:00-19:00",
           ],
         );
-        assert.equal(allMarks.some((mark) => mark.title === "Chơi ở nhà cùng gia đình"), false);
-        assert.equal(allMarks.some((mark) => mark.title === "Tham quan Festival Mỹ thuật trẻ tại VCCA"), false);
-        assert.equal(allMarks.some((mark) => mark.title === "Chuẩn bị đồ golf EPGA ngày mai"), false);
-        assert.equal(allMarks.some((mark) => mark.title === "Mua hoa tặng vợ sáng thứ 7"), false);
+        assert.equal(allMarks.some((mark) => mark.title === "Ch\u01a1i \u1edf nh\u00e0 c\u00f9ng gia \u0111\u00ecnh"), false);
+        assert.equal(allMarks.some((mark) => mark.title === "Tham quan Festival M\u1ef9 thu\u1eadt tr\u1ebb t\u1ea1i VCCA"), false);
+        assert.equal(allMarks.some((mark) => mark.title === "Chu\u1ea9n b\u1ecb \u0111\u1ed3 golf EPGA ng\u00e0y mai"), false);
+        assert.equal(allMarks.some((mark) => mark.title === "Mua hoa t\u1eb7ng v\u1ee3 s\u00e1ng th\u1ee9 7"), false);
         assert.equal(allMarks.some((mark) => mark.title.startsWith("EPGA golf")), false);
-        assert.equal(sundayMarks.some((mark) => mark.title === "Chuẩn bị trứng ngâm tương 3 ngày"), true);
+        assert.equal(sundayMarks.some((mark) => mark.title === "Chu\u1ea9n b\u1ecb tr\u1ee9ng ng\u00e2m t\u01b0\u01a1ng 3 ng\u00e0y"), true);
         assert.equal(saturdayMarks.some((mark) => mark.title.includes("Chipping 7 m")), true);
         assert.equal(saturdayMarks.some((mark) => mark.title.includes("23 putts")), true);
         assert.equal(allMarks.some((mark) => ["Family activity", "Family support", "Morning Support", "Afternoon Support"].includes(mark.title)), false);
@@ -9437,9 +9861,9 @@ const tests: TestCase[] = [
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-20T05:30:00.000Z" && item.title === "Weight In"), true);
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-20T11:30:00.000Z" && item.title?.includes("Chipping 3 m")), true);
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-24T18:00:00.000Z" && item.title?.includes("23 putts")), true);
-        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-25T07:00:00.000Z" && item.title === "Mua hoa tặng vợ sáng thứ 7"), false);
+        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-25T07:00:00.000Z" && item.title === "Mua hoa t\u1eb7ng v\u1ee3 s\u00e1ng th\u1ee9 7"), false);
         assert.equal(
-          signalTargets.filter((item) => item?.title === "Trông bố trong viện").map((item) => item!.scheduledAt).sort().join("|"),
+          signalTargets.filter((item) => item?.title === "Tr\u00f4ng b\u1ed1 trong vi\u1ec7n").map((item) => item?.scheduledAt).sort().join("|"),
           [
             "2026-07-25T06:45:00.000Z",
             "2026-07-25T10:45:00.000Z",
@@ -9468,7 +9892,7 @@ const tests: TestCase[] = [
         assert.equal(postWorkoutRoutine?.actionSheet?.embeddedChecklist?.items.length, 4);
         assert.equal(postWorkoutRoutine?.actionSheet?.embeddedChecklist?.items.some((item) => item.label.includes("Hikid")), true);
         assert.equal(postWorkoutRoutine?.actionSheet?.embeddedChecklist?.items.some((item) => item.label.includes("Brainfood")), true);
-        assert.equal(postWorkoutRoutine?.actionSheet?.embeddedChecklist?.items.some((item) => item.label.includes("Thắp hương")), true);
+        assert.equal(postWorkoutRoutine?.actionSheet?.embeddedChecklist?.items.some((item) => item.label.includes("Th\u1eafp h\u01b0\u01a1ng")), true);
       } finally {
         harness.close();
       }
@@ -9496,7 +9920,7 @@ const tests: TestCase[] = [
           localDate: "2026-07-25",
           pathId: familyPath!.id,
           trailDayId: saturdayTrailDay.id,
-          title: "Mua hoa tặng vợ sáng thứ 7",
+          title: "Mua hoa t\u1eb7ng v\u1ee3 s\u00e1ng th\u1ee9 7",
           origin: MarkInstanceOrigin.WeeklyPlanned,
           status: MarkInstanceStatus.Planned,
           generationKey: "legacy_saturday_flower_for_hospital_patch",
@@ -9505,7 +9929,7 @@ const tests: TestCase[] = [
           localDate: "2026-07-25",
           pathId: familyPath!.id,
           trailDayId: saturdayTrailDay.id,
-          title: "Tham quan Festival Mỹ thuật trẻ tại VCCA",
+          title: "Tham quan Festival M\u1ef9 thu\u1eadt tr\u1ebb t\u1ea1i VCCA",
           origin: MarkInstanceOrigin.WeeklyPlanned,
           status: MarkInstanceStatus.Completed,
           generationKey: "legacy_vcca_completed_for_hospital_patch",
@@ -9529,13 +9953,13 @@ const tests: TestCase[] = [
 
         const marksByDate = await listMarksByDateMap(harness, "user_1", ["2026-07-25", "2026-07-26"]);
         const allMarks = Object.values(marksByDate).flat();
-        const careMarks = allMarks.filter((mark) => mark.title === "Trông bố trong viện");
+        const careMarks = allMarks.filter((mark) => mark.title === "Tr\u00f4ng b\u1ed1 trong vi\u1ec7n");
         assert.equal(careMarks.length, 6);
         assert.equal(careMarks.every((mark) => mark.pathId === characterPath!.id), true);
         assert.equal(allMarks.filter((mark) => mark.title === "Weight In").length, 2);
         assert.equal(allMarks.filter((mark) => mark.title.includes("Chipping")).length, 2);
         assert.equal(allMarks.filter((mark) => mark.title.includes("23 putts")).length, 2);
-        assert.equal(allMarks.some((mark) => mark.title === "Chuẩn bị trứng ngâm tương 3 ngày"), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Chu\u1ea9n b\u1ecb tr\u1ee9ng ng\u00e2m t\u01b0\u01a1ng 3 ng\u00e0y"), true);
 
         const scheduled = await harness.repos.signals.listSignalsByStatus([SignalStatus.Scheduled], { limit: 100 });
         assert.equal(scheduled.items.length, 6);
@@ -9543,7 +9967,7 @@ const tests: TestCase[] = [
         const targetTitles = await Promise.all(
           scheduled.items.map(async (signal) => (await harness.repos.marks.getMarkInstanceById(signal.targetId))?.title),
         );
-        assert.equal(targetTitles.every((title) => title === "Trông bố trong viện"), true);
+        assert.equal(targetTitles.every((title) => title === "Tr\u00f4ng b\u1ed1 trong vi\u1ec7n"), true);
         assert.deepEqual(
           scheduled.items.map((signal) => signal.scheduledAt).sort(),
           [
@@ -9604,35 +10028,35 @@ const tests: TestCase[] = [
         assert.equal(allMarks.filter((mark) => mark.title === "Post Workout Routine").length, 7);
         assert.equal(allMarks.filter((mark) => mark.title.includes("Chipping")).length, 7);
         assert.equal(allMarks.filter((mark) => mark.title.includes("23 putts")).length, 7);
-        assert.equal(allMarks.filter((mark) => mark.title.startsWith("Viết RSD")).length, 7);
+        assert.equal(allMarks.filter((mark) => mark.title.startsWith("Vi\u1ebft RSD")).length, 7);
         assert.equal(allMarks.filter((mark) => mark.title.startsWith("Book ")).length, 2);
 
         const snagTitles = new Set([
-          "Brainstorm pipeline tăng view website",
-          "Tạo prompt mark đăng bài hàng tuần",
-          "Viết bài website SNAG #1",
-          "Viết bài website SNAG #2",
-          "Viết bài website SNAG #3",
+          "Brainstorm pipeline t\u0103ng view website",
+          "T\u1ea1o prompt mark \u0111\u0103ng b\u00e0i h\u00e0ng tu\u1ea7n",
+          "Vi\u1ebft b\u00e0i website SNAG #1",
+          "Vi\u1ebft b\u00e0i website SNAG #2",
+          "Vi\u1ebft b\u00e0i website SNAG #3",
         ]);
         assert.equal(allMarks.filter((mark) => snagTitles.has(mark.title)).length, 5);
-        assert.equal(allMarks.some((mark) => mark.title === "Waymark Planning" && mark.description?.includes("chu kỳ xuất bản nội dung")), true);
+        assert.equal(allMarks.some((mark) => mark.title === "Waymark Planning" && mark.description?.includes("chu k\u1ef3 xu\u1ea5t b\u1ea3n n\u1ed9i dung")), true);
 
         const saturdayMarks = marksByDate["2026-08-01"] ?? [];
         const saturdayLeague = saturdayMarks.filter((mark) => mark.title === "SNAG Golf League");
-        const saturdayDriving = saturdayMarks.filter((mark) => mark.title === "Lái xe cùng con tại phố đi bộ");
+        const saturdayDriving = saturdayMarks.filter((mark) => mark.title === "L\u00e1i xe c\u00f9ng con t\u1ea1i ph\u1ed1 \u0111i b\u1ed9");
         assert.equal(saturdayLeague.length, 1);
         assert.equal(saturdayLeague[0]?.scheduledStartAt, "2026-08-01T08:00:00.000");
         assert.equal(saturdayLeague[0]?.scheduledEndAt, "2026-08-01T11:30:00.000");
         assert.equal(saturdayDriving.length, 1);
         assert.equal(saturdayDriving[0]?.scheduledStartAt, "2026-08-01T13:30:00.000");
         assert.equal(saturdayDriving[0]?.scheduledEndAt, "2026-08-01T16:45:00.000");
-        assert.equal(saturdayMarks.some((mark) => mark.title === "Chọn ảnh và kể lại trải nghiệm ngày"), true);
-        assert.equal(saturdayMarks.some((mark) => mark.title === "Mua hoa tặng vợ sáng thứ 7" && mark.scheduledStartAt === "2026-08-01T07:30:00.000"), true);
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Ch\u1ecdn \u1ea3nh v\u00e0 k\u1ec3 l\u1ea1i tr\u1ea3i nghi\u1ec7m ng\u00e0y"), true);
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Mua hoa t\u1eb7ng v\u1ee3 s\u00e1ng th\u1ee9 7" && mark.scheduledStartAt === "2026-08-01T07:30:00.000"), true);
 
         const sundayMarks = marksByDate["2026-08-02"] ?? [];
         assert.equal(sundayMarks.filter((mark) => mark.title.startsWith("EPGA golf")).length, 2);
-        assert.equal(sundayMarks.some((mark) => mark.title === "Nghỉ và sắp đồ cho tuần mới"), true);
-        assert.equal(sundayMarks.some((mark) => mark.title === "Chuẩn bị bài Thứ 2"), true);
+        assert.equal(sundayMarks.some((mark) => mark.title === "Ngh\u1ec9 v\u00e0 s\u1eafp \u0111\u1ed3 cho tu\u1ea7n m\u1edbi"), true);
+        assert.equal(sundayMarks.some((mark) => mark.title === "Chu\u1ea9n b\u1ecb b\u00e0i Th\u1ee9 2"), true);
 
         const chippingMarks = allMarks.filter((mark) => mark.title.includes("Chipping"));
         const puttingMarks = allMarks.filter((mark) => mark.title.includes("23 putts"));
@@ -9680,7 +10104,7 @@ const tests: TestCase[] = [
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-27T05:30:00.000Z" && item.title === "Weight In"), true);
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-27T11:30:00.000Z" && item.title?.includes("Chipping 3 m")), true);
         assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-07-31T18:00:00.000Z" && item.title?.includes("23 putts")), true);
-        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-08-01T07:30:00.000Z" && item.title === "Mua hoa tặng vợ sáng thứ 7"), true);
+        assert.equal(signalTargets.some((item) => item?.scheduledAt === "2026-08-01T07:30:00.000Z" && item.title === "Mua hoa t\u1eb7ng v\u1ee3 s\u00e1ng th\u1ee9 7"), true);
       } finally {
         harness.close();
       }
@@ -9742,22 +10166,22 @@ const tests: TestCase[] = [
         assert.equal(allMarks.every((mark) => mark.dueAt === undefined), true);
         assert.equal(allMarks.filter((mark) => mark.title === "Weight In").length, 7);
         assert.equal(allMarks.filter((mark) => mark.title === "Post Workout Routine").length, 7);
-        assert.equal(allMarks.filter((mark) => mark.title.startsWith("Học AI n8n")).length, 16);
-        assert.equal(allMarks.filter((mark) => mark.title === "Supervising + Daily DCH + tổng hợp n8n").length, 4);
+        assert.equal(allMarks.filter((mark) => mark.title.startsWith("H\u1ecdc AI n8n")).length, 16);
+        assert.equal(allMarks.filter((mark) => mark.title === "Supervising + Daily DCH + t\u1ed5ng h\u1ee3p n8n").length, 4);
         assert.equal(allMarks.filter((mark) => mark.title.includes("Chipping")).length, 7);
         assert.equal(allMarks.filter((mark) => mark.title.includes("23 putts")).length, 7);
         assert.equal(allMarks.filter((mark) => mark.title.startsWith("EPGA golf")).length, 4);
         assert.equal(allMarks.some((mark) => mark.title === "Waymark Planning" && mark.scheduledStartAt === "2026-08-07T21:00:00.000"), true);
 
         const focusTitles = new Set([
-          "Test biểu mẫu QLSD Thẻ",
-          "Hoàn thiện slide Sub Account LNH",
-          "Planning SCH và rà checklist golive",
+          "Test bi\u1ec3u m\u1eabu QLSD Th\u1ebb",
+          "Ho\u00e0n thi\u1ec7n slide Sub Account LNH",
+          "Planning SCH v\u00e0 r\u00e0 checklist golive",
           "Supervising BIDV + Daily DCH",
-          "Thiết kế báo cáo và đối soát DCH",
-          "Supervising + Daily DCH + tổng hợp n8n",
+          "Thi\u1ebft k\u1ebf b\u00e1o c\u00e1o v\u00e0 \u0111\u1ed1i so\u00e1t DCH",
+          "Supervising + Daily DCH + t\u1ed5ng h\u1ee3p n8n",
         ]);
-        const ninetyMinuteMarks = allMarks.filter((mark) => focusTitles.has(mark.title) || mark.title.startsWith("Học AI n8n"));
+        const ninetyMinuteMarks = allMarks.filter((mark) => focusTitles.has(mark.title) || mark.title.startsWith("H\u1ecdc AI n8n"));
         assert.equal(ninetyMinuteMarks.length, 25);
         assert.equal(ninetyMinuteMarks.every((mark) => {
           assert.ok(mark.scheduledStartAt);
@@ -9802,9 +10226,9 @@ const tests: TestCase[] = [
         }
 
         const saturdayMarks = marksByDate["2026-08-08"] ?? [];
-        assert.equal(saturdayMarks.some((mark) => mark.title === "Chơi ở nhà, chuẩn bị đi VCCA"), true);
-        assert.equal(saturdayMarks.some((mark) => mark.title === "Tham quan Festival Mỹ thuật Trẻ tại VCCA"), true);
-        assert.equal(saturdayMarks.some((mark) => mark.title === "Mua hoa tặng vợ" && mark.scheduledStartAt === "2026-08-08T07:30:00.000"), true);
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Ch\u01a1i \u1edf nh\u00e0, chu\u1ea9n b\u1ecb \u0111i VCCA"), true);
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Tham quan Festival M\u1ef9 thu\u1eadt Tr\u1ebb t\u1ea1i VCCA"), true);
+        assert.equal(saturdayMarks.some((mark) => mark.title === "Mua hoa t\u1eb7ng v\u1ee3" && mark.scheduledStartAt === "2026-08-08T07:30:00.000"), true);
         const sundayMarks = marksByDate["2026-08-09"] ?? [];
         assert.equal(sundayMarks.filter((mark) => mark.title.startsWith("EPGA golf")).length, 4);
         assert.equal(sundayMarks.every((mark) => !mark.title.startsWith("EPGA golf") || resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) === null), true);
@@ -9826,7 +10250,7 @@ const tests: TestCase[] = [
         assert.equal(putting?.actionSheet?.primaryActionLabel?.en, "Start Practice");
 
         const sundayToday = await loadTodayData(services, "en", { now: new Date("2026-08-09T08:30:00.000Z") });
-        const epga = sundayToday.marks.find((mark) => mark.title.en === "EPGA golf — buổi sáng 1");
+        const epga = sundayToday.marks.find((mark) => mark.title.en === "EPGA golf \u2014 bu\u1ed5i s\u00e1ng 1");
         assert.ok(epga);
         assert.equal(epga?.interactionKind, "default");
       } finally {
@@ -9847,7 +10271,7 @@ const tests: TestCase[] = [
           userId: "user_1",
           pathId: familyPath!.id,
           trailDayId: trailDay.id,
-          title: "Chuẩn bị bữa sáng cho cả nhà",
+          title: "Chu\u1ea9n b\u1ecb b\u1eefa s\u00e1ng cho c\u1ea3 nh\u00e0",
           description: "Existing manual breakfast mark",
           origin: MarkInstanceOrigin.ManualPlan,
           status: MarkInstanceStatus.Planned,
@@ -9876,7 +10300,7 @@ const tests: TestCase[] = [
         ]);
         const breakfastMarks = Object.values(marksByDate)
           .flat()
-          .filter((mark) => mark.title === "Chuẩn bị bữa sáng cho cả nhà");
+          .filter((mark) => mark.title === "Chu\u1ea9n b\u1ecb b\u1eefa s\u00e1ng cho c\u1ea3 nh\u00e0");
         assert.equal(breakfastMarks.length, 7);
         assert.equal(breakfastMarks.filter((mark) => mark.origin === MarkInstanceOrigin.ManualPlan).length, 1);
         assert.equal(breakfastMarks.filter((mark) => mark.origin === MarkInstanceOrigin.WeeklyPlanned).length, 6);
@@ -9922,7 +10346,7 @@ const tests: TestCase[] = [
         const staleMorningMark = before["2026-07-02"]?.find((mark) => mark.scheduledStartAt?.slice(11, 16) === "08:00");
         assert.ok(staleMorningMark);
         await harness.repos.marks.updateMarkInstance(staleMorningMark.id, {
-          title: "Core BA Transfer — Tạo slide đề xuất quy trình BA và RSD",
+          title: "Core BA Transfer \u2014 T\u1ea1o slide \u0111\u1ec1 xu\u1ea5t quy tr\u00ecnh BA v\u00e0 RSD",
         });
 
         const patch = await importWeeklyTimetable202607020305Patch(services, "user_1");
@@ -9946,11 +10370,11 @@ const tests: TestCase[] = [
         assert.equal(after["2026-07-04"]?.length, untouchedBeforeCounts["2026-07-04"]);
 
         const targetMarks = [...(after["2026-07-02"] ?? []), ...(after["2026-07-03"] ?? []), ...(after["2026-07-05"] ?? [])];
-        assert.equal(targetMarks.some((mark) => mark.title === "Morning Food Intake — Brainfood baseline"), false);
-        assert.equal(targetMarks.some((mark) => mark.title === "DCH — Đề xuất cơ chế quản lý dự án, lấy story done trong tuần, công việc Scrum Master, masterplan DCH"), true);
-        assert.equal(targetMarks.some((mark) => mark.title === "Core BA Transfer — Tạo slide đề xuất quy trình BA và RSD"), false);
-        assert.equal(targetMarks.some((mark) => mark.title === "Chỉnh sửa / xin ý kiến / transfer luồng sequence sub account"), true);
-        assert.equal(targetMarks.some((mark) => mark.title === "Thi đấu 9 hố ở EPGA — tiếp tục / support"), true);
+        assert.equal(targetMarks.some((mark) => mark.title === "Morning Food Intake \u2014 Brainfood baseline"), false);
+        assert.equal(targetMarks.some((mark) => mark.title === "DCH \u2014 Lu\u1ed3ng giao d\u1ecbch r\u00fat ti\u1ec1n sub account; lu\u1ed3ng giao d\u1ecbch chuy\u1ec3n ti\u1ec1n n\u1ed9i b\u1ed9 sub account"), true);
+        assert.equal(targetMarks.some((mark) => mark.title === "Core BA Transfer \u2014 T\u1ea1o slide \u0111\u1ec1 xu\u1ea5t quy tr\u00ecnh BA v\u00e0 RSD"), false);
+        assert.equal(targetMarks.some((mark) => mark.title === "Ch\u1ec9nh s\u1eeda / xin \u00fd ki\u1ebfn / transfer lu\u1ed3ng sequence sub account"), true);
+        assert.equal(targetMarks.some((mark) => mark.title === "Thi \u0111\u1ea5u 9 h\u1ed1 \u1edf EPGA \u2014 ti\u1ebfp t\u1ee5c / support"), true);
         assert.equal(targetMarks.every((mark) => mark.dueAt === undefined), true);
       } finally {
         harness.close();
@@ -10027,6 +10451,7 @@ const tests: TestCase[] = [
           weekStartDate: "2026-06-01",
           weekEndDate: "2026-06-07",
           importBatchId: "weekly_import_exact_provenance_cleanup",
+          allowTitleRefs: true,
           items: [
             {
               localDate: "2026-06-01",
@@ -10201,8 +10626,8 @@ const tests: TestCase[] = [
         await importApprovedWeeklyTimetable(harness);
 
         const dayOneMarks = await harness.repos.marks.listMarkInstancesByDate("user_1", "2026-06-01");
-        const completed = dayOneMarks.find((mark) => mark.title === "Execute Testcase — PHT GNQT Luồng KHCN thẻ phụ");
-        const edited = dayOneMarks.find((mark) => mark.title === "Cập nhật và Ký duyệt RSD biểu mẫu");
+        const completed = dayOneMarks.find((mark) => mark.title === "Execute Testcase \u2014 PHT GNQT Lu\u1ed3ng KHCN th\u1ebb ph\u1ee5");
+        const edited = dayOneMarks.find((mark) => mark.title === "C\u1eadp nh\u1eadt v\u00e0 K\u00fd duy\u1ec7t RSD bi\u1ec3u m\u1eabu");
         assert.ok(completed);
         assert.ok(edited);
 
@@ -10345,6 +10770,35 @@ const tests: TestCase[] = [
         assert.equal(completedDetail.milestones[0]?.completedMarks, 1);
         assert.equal(completedDetail.milestones[0]?.totalMarks, 7);
 
+        const healthTrailDay = await harness.repos.trailDays.getOrCreateTrailDay("user_1", "2026-06-02");
+        const expeditionLevelMark = await harness.repos.marks.createMarkInstance({
+          userId: "user_1",
+          pathId: healthPath!.id,
+          trailDayId: healthTrailDay.id,
+          expeditionId: cutTo70!.id,
+          title: "Expedition-level health note",
+          origin: MarkInstanceOrigin.ManualPlan,
+          status: MarkInstanceStatus.Planned,
+          scheduledStartAt: "2026-06-02T20:00:00.000",
+          scheduledEndAt: "2026-06-02T21:00:00.000",
+          dueAt: "2026-06-02T21:00:00.000",
+          proofMediaAssetIds: [],
+        });
+        const expeditionMarks = await harness.repos.marks.listMarkInstancesByExpedition(cutTo70!.id);
+        const groupedMarks = groupExpeditionMarksByMilestone(milestonesAfter, expeditionMarks);
+        const detailWithNoMilestone = buildExpeditionDetailModel(
+          cutTo70!,
+          healthPath!,
+          milestonesAfter,
+          groupedMarks.marksByMilestoneId,
+          "en",
+          groupedMarks.unassignedMarks,
+        );
+        assert.equal(detailWithNoMilestone.expedition.totalMarks, 8);
+        assert.equal(detailWithNoMilestone.milestones[0]?.totalMarks, 7);
+        assert.equal(detailWithNoMilestone.unassignedMarks?.totalMarks, 1);
+        assert.equal(detailWithNoMilestone.unassignedMarks?.plannedMarks[0]?.id, expeditionLevelMark.id);
+
         const familyPath = await getPathByTitle(harness, "user_1", "Family & Home");
         assert.ok(familyPath);
         const familyTrailDay = await harness.repos.trailDays.getOrCreateTrailDay("user_1", "2026-06-01");
@@ -10398,12 +10852,13 @@ const tests: TestCase[] = [
           userId: "user_1",
           weekStartDate: "2026-06-01",
           weekEndDate: "2026-06-07",
+          allowTitleRefs: true,
           items: [
             {
               localDate: "2026-06-01",
               startTime: "08:00",
               endTime: "09:30",
-              title: "Execute Testcase — PHT GNQT Luồng KHCN thẻ phụ",
+              title: "Execute Testcase \u2014 PHT GNQT Lu\u1ed3ng KHCN th\u1ebb ph\u1ee5",
               pathRef: "Career",
               blockKey: "morning_activity",
             },
@@ -10441,12 +10896,13 @@ const tests: TestCase[] = [
           userId: "user_1",
           weekStartDate: "2026-06-01",
           weekEndDate: "2026-06-07",
+          allowTitleRefs: true,
           items: [
             {
               localDate: "2026-06-01",
               startTime: "08:00",
               endTime: "09:30",
-              title: "Execute Testcase — PHT GNQT Luồng KHCN thẻ phụ",
+              title: "Execute Testcase \u2014 PHT GNQT Lu\u1ed3ng KHCN th\u1ebb ph\u1ee5",
               pathRef: "Career",
               blockKey: "morning_activity",
             },
@@ -10457,7 +10913,7 @@ const tests: TestCase[] = [
         assert.equal(report.counts.conflict, 0);
         const dayMarks = await harness.repos.marks.listMarkInstancesByDate("user_1", "2026-06-01");
         assert.equal(dayMarks.some((mark) => mark.title === "Moved carry-over mark"), true);
-        assert.equal(dayMarks.some((mark) => mark.title === "Execute Testcase — PHT GNQT Luồng KHCN thẻ phụ"), true);
+        assert.equal(dayMarks.some((mark) => mark.title === "Execute Testcase \u2014 PHT GNQT Lu\u1ed3ng KHCN th\u1ebb ph\u1ee5"), true);
       } finally {
         harness.close();
       }
@@ -10504,7 +10960,8 @@ const tests: TestCase[] = [
         assert.equal(markTemplates.length, 0);
         assert.equal(packCheckTemplates.length, 1);
         assert.equal(packCheckTemplates[0]!.title, "Pilgrimage Readiness Check");
-        assert.equal(expeditions.length, 0);
+        assert.equal(expeditions.length, 1);
+        assert.equal(expeditions[0]!.title, "Building Waymark");
       } finally {
         harness.close();
       }
@@ -10534,4 +10991,3 @@ async function main() {
 }
 
 void main();
-

@@ -1,34 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import type { MarkInstance, Milestone } from "../domain/waymark";
-import { ExpeditionStatus, MarkInstanceStatus, MilestoneStatus } from "../domain/waymark";
-import type {
-  WeeklyMilestoneItem,
-  WeeklyMilestonePathFilterItem,
-  WeeklyMilestoneUrgency,
-} from "../components/paths/types";
-import type { Locale, PathId } from "../types/ui";
+import { ExpeditionStatus, MarkInstanceStatus, MilestoneStatus, WeekPlanItemStatus } from "../domain/waymark";
+import type { WeeklyMilestoneItem, WeeklyMilestoneMarkItem } from "../components/paths/types";
+import type { Locale } from "../types/ui";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
-import { formatLocalDate, getWeekEndDate, getWeekStartDate, mapUiPathId } from "./waymarkUi";
+import { formatLocalDate, getWeekEndDate, getWeekStartDate, mapUiPathId, shiftLocalDate } from "./waymarkUi";
 import { useWaymarkApp } from "./WaymarkAppProvider";
 
 type WeeklyMilestonesState =
-  | { status: "loading"; error: null; items: WeeklyMilestoneItem[]; missingStartDateCount: number }
-  | { status: "error"; error: Error; items: WeeklyMilestoneItem[]; missingStartDateCount: number }
-  | { status: "ready"; error: null; items: WeeklyMilestoneItem[]; missingStartDateCount: number };
+  | { status: "loading"; error: null; items: WeeklyMilestoneItem[] }
+  | { status: "error"; error: Error; items: WeeklyMilestoneItem[] }
+  | { status: "ready"; error: null; items: WeeklyMilestoneItem[] };
 
-export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: boolean; selectedPathId?: "all" | PathId } = {}) {
+export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: boolean; weekStartDate?: string } = {}) {
   const app = useWaymarkApp();
   const enabled = options.enabled ?? true;
-  const selectedPathId = options.selectedPathId ?? "all";
+  const selectedWeekStart = options.weekStartDate;
+  const [refreshKey, setRefreshKey] = useState(0);
   const [state, setState] = useState<WeeklyMilestonesState>({
     status: "loading",
     error: null,
     items: [],
-    missingStartDateCount: 0,
   });
 
   const today = useMemo(() => formatLocalDate(new Date(), app.user.timezone), [app.user.timezone]);
-  const weekStart = useMemo(() => getWeekStartDate(today, app.user.weekStartsOn), [app.user.weekStartsOn, today]);
+  const currentWeekStart = useMemo(() => getWeekStartDate(today, app.user.weekStartsOn), [app.user.weekStartsOn, today]);
+  const weekStart = selectedWeekStart ?? currentWeekStart;
   const weekEnd = useMemo(() => getWeekEndDate(weekStart), [weekStart]);
 
   useEffect(() => {
@@ -41,12 +38,16 @@ export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: 
     }
 
     void (async () => {
-      setState({ status: "loading", error: null, items: [], missingStartDateCount: 0 });
+      setState({ status: "loading", error: null, items: [] });
 
       try {
         const paths = await app.repositories.paths.listActivePaths(app.user.id);
         const loadedItems: WeeklyMilestoneItem[] = [];
-        let missingStartDateCount = 0;
+        const weeklyPlanMarksByMilestoneId = await loadWeeklyPlanMarksByMilestone(app, weekStart);
+        const marksByMilestoneId = mergeWeeklyMarkMaps(
+          weeklyPlanMarksByMilestoneId,
+          await loadWeeklyDateMarksByMilestone(app, weekStart, weekEnd),
+        );
 
         for (const path of paths) {
           const pathId = mapUiPathId(path.slug, path.title);
@@ -63,20 +64,12 @@ export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: 
 
             const milestones = await app.repositories.expeditions.listMilestonesByExpedition(expedition.id);
             for (const milestone of milestones) {
-              if (!isOpenMilestone(milestone)) {
+              const marks = marksByMilestoneId.get(milestone.id) ?? [];
+              const hasWeeklyPlanMark = (weeklyPlanMarksByMilestoneId.get(milestone.id)?.length ?? 0) > 0;
+              if (!isWeeklyMilestone(milestone, weekStart, weekEnd, hasWeeklyPlanMark)) {
                 continue;
               }
 
-              if (!milestone.startDate) {
-                missingStartDateCount += 1;
-                continue;
-              }
-
-              if (milestone.startDate >= weekStart) {
-                continue;
-              }
-
-              const marks = await app.repositories.marks.listMarkInstancesByMilestone(milestone.id);
               loadedItems.push({
                 id: milestone.id,
                 pathRecordId: path.id,
@@ -85,24 +78,17 @@ export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: 
                 pathAccent: visual.color.accent,
                 pathAccentDeep: visual.color.accentDeep,
                 pathAccentSoft: visual.color.accentSoft,
+                pathIconAssetId: visual.pathIconAssetId,
                 pathIconSemanticName: `pathIdentity.${visual.icon}`,
                 expeditionId: expedition.id,
                 expeditionTitle: expedition.title,
                 title: milestone.title,
-                startDate: milestone.startDate,
-                targetDate: milestone.targetDate ?? null,
-                targetDateLabel: formatMilestoneTargetDate(milestone.targetDate, locale),
-                urgency: getMilestoneUrgency(milestone.targetDate, weekStart, weekEnd),
-                marks: marks
-                  .filter((mark) => isMarkInWeek(mark, weekStart, weekEnd))
-                  .sort(compareMarks)
-                  .map((mark) => ({
-                    id: mark.id,
-                    title: mark.title,
-                    weekdayLabel: formatMarkWeekday(mark, locale),
-                    completed: isResolvedMark(mark),
-                  })),
+                startDate: milestone.startDate ?? null,
+                endDate: milestone.targetDate ?? null,
+                completedAt: milestone.completedAt ?? null,
+                status: milestone.status,
                 sortOrder: path.sortOrder * 100000 + expedition.sortOrder * 1000 + milestone.sortOrder * 10 + milestone.orderIndex,
+                marks,
               });
             }
           }
@@ -111,7 +97,7 @@ export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: 
         loadedItems.sort(compareWeeklyMilestones);
 
         if (!cancelled) {
-          setState({ status: "ready", error: null, items: loadedItems, missingStartDateCount });
+          setState({ status: "ready", error: null, items: loadedItems });
         }
       } catch (error) {
         if (!cancelled) {
@@ -119,7 +105,6 @@ export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: 
             status: "error",
             error: error instanceof Error ? error : new Error("Failed to load weekly milestones."),
             items: [],
-            missingStartDateCount: 0,
           });
         }
       }
@@ -128,116 +113,194 @@ export function useWaymarkWeeklyMilestones(locale: Locale, options: { enabled?: 
     return () => {
       cancelled = true;
     };
-  }, [app, enabled, locale, weekEnd, weekStart]);
-
-  const filteredItems = useMemo(
-    () => (selectedPathId === "all" ? state.items : state.items.filter((item) => item.pathId === selectedPathId)),
-    [selectedPathId, state.items],
-  );
-
-  const pathFilters = useMemo((): WeeklyMilestonePathFilterItem[] => {
-    const countsByPathId = new Map<PathId, number>();
-    for (const item of state.items) {
-      countsByPathId.set(item.pathId, (countsByPathId.get(item.pathId) ?? 0) + 1);
-    }
-
-    return [
-      { id: "all", label: locale === "vi" ? "All paths" : "All paths", count: state.items.length },
-      ...todayPathHeroPaths
-        .filter((path) => countsByPathId.has(path.id))
-        .map((path) => ({
-          id: path.id,
-          label: path.compactLabel[locale],
-          count: countsByPathId.get(path.id) ?? 0,
-        })),
-    ];
-  }, [locale, state.items]);
+  }, [app, enabled, locale, refreshKey, weekEnd, weekStart]);
 
   return {
     ...state,
-    items: filteredItems,
+    items: state.items,
     allItems: state.items,
-    pathFilters,
+    refresh: () => setRefreshKey((current) => current + 1),
     weekStart,
     weekEnd,
   };
 }
 
-function isOpenMilestone(milestone: Milestone) {
-  return milestone.status === MilestoneStatus.Planned || milestone.status === MilestoneStatus.Active;
+function isWeeklyMilestone(milestone: Milestone, weekStart: string, weekEnd: string, hasWeeklyPlanMark: boolean) {
+  const targetDate = milestone.targetDate?.slice(0, 10) ?? null;
+  const completedDate = milestone.completedAt?.slice(0, 10) ?? null;
+  const isOpenWeekly =
+    (milestone.status === MilestoneStatus.Planned || milestone.status === MilestoneStatus.Active) &&
+    targetDate != null &&
+    targetDate >= weekStart &&
+    targetDate <= weekEnd;
+  const isCompletedThisWeek =
+    milestone.status === MilestoneStatus.Completed &&
+    completedDate != null &&
+    completedDate >= weekStart &&
+    completedDate <= weekEnd;
+
+  return isOpenWeekly || isCompletedThisWeek || hasWeeklyPlanMark;
 }
 
-function getMilestoneUrgency(targetDate: string | undefined, weekStart: string, weekEnd: string): WeeklyMilestoneUrgency {
-  if (!targetDate) {
-    return "no_target";
-  }
-  if (targetDate < weekStart) {
-    return "overdue";
-  }
-  if (targetDate <= weekEnd) {
-    return "due_this_week";
-  }
-  return "ahead";
-}
-
-function formatMilestoneTargetDate(targetDate: string | undefined, locale: Locale) {
-  if (!targetDate) {
-    return locale === "vi" ? "Chua co target" : "No target";
-  }
-
-  return new Intl.DateTimeFormat(locale === "vi" ? "vi-VN" : "en-US", {
-    day: "numeric",
-    month: "short",
-  }).format(new Date(`${targetDate}T00:00:00.000Z`));
-}
-
-function isMarkInWeek(mark: MarkInstance, weekStart: string, weekEnd: string) {
-  const localDate = getMarkLocalDate(mark);
-  return Boolean(localDate && localDate >= weekStart && localDate <= weekEnd);
-}
-
-function getMarkLocalDate(mark: MarkInstance) {
-  return (mark.scheduledStartAt ?? mark.dueAt ?? mark.completedAt ?? "").slice(0, 10) || null;
-}
-
-function formatMarkWeekday(mark: MarkInstance, locale: Locale) {
-  const localDate = getMarkLocalDate(mark);
-  if (!localDate) {
-    return locale === "vi" ? "Tuan nay" : "This week";
+async function loadWeeklyPlanMarksByMilestone(
+  app: ReturnType<typeof useWaymarkApp>,
+  weekStart: string,
+): Promise<Map<string, WeeklyMilestoneMarkItem[]>> {
+  const marksByMilestoneId = new Map<string, WeeklyMilestoneMarkItem[]>();
+  const weekPlan = await app.repositories.weekPlans.getByWeekStart(app.user.id, weekStart);
+  if (!weekPlan) {
+    return marksByMilestoneId;
   }
 
-  return new Intl.DateTimeFormat(locale === "vi" ? "vi-VN" : "en-US", {
-    weekday: "short",
-  }).format(new Date(`${localDate}T00:00:00.000Z`));
+  const items = await app.repositories.weekPlans.listItems(weekPlan.id);
+  for (const item of items) {
+    if (item.status === WeekPlanItemStatus.Removed || !item.createdMarkInstanceId) {
+      continue;
+    }
+    const mark = await app.repositories.marks.getMarkInstanceById(item.createdMarkInstanceId);
+    if (!mark?.milestoneId || !isWeeklyMilestoneMarkVisible(mark.status)) {
+      continue;
+    }
+    const localDate = mark.scheduledStartAt?.slice(0, 10) ?? item.localDate;
+    if (!localDate) {
+      continue;
+    }
+    appendWeeklyMilestoneMark(marksByMilestoneId, mark.milestoneId, mapWeeklyMilestoneMark(mark, localDate));
+  }
+
+  sortWeeklyMarkMap(marksByMilestoneId);
+  return marksByMilestoneId;
 }
 
-function isResolvedMark(mark: MarkInstance) {
+async function loadWeeklyDateMarksByMilestone(
+  app: ReturnType<typeof useWaymarkApp>,
+  weekStart: string,
+  weekEnd: string,
+): Promise<Map<string, WeeklyMilestoneMarkItem[]>> {
+  const marksByMilestoneId = new Map<string, WeeklyMilestoneMarkItem[]>();
+  const weekDates = enumerateWeekDates(weekStart, weekEnd);
+  const weeklyMarks = await Promise.all(
+    weekDates.map(async (localDate) => {
+      const marks = await app.repositories.marks.listMarkInstancesByDate(app.user.id, localDate);
+      return marks
+        .filter((mark) => mark.milestoneId && isWeeklyMilestoneMarkVisible(mark.status))
+        .map((mark) => mapWeeklyMilestoneMark(mark, localDate));
+    }),
+  );
+
+  for (const marks of weeklyMarks) {
+    for (const mark of marks) {
+      const source = mark as WeeklyMilestoneMarkItem & { milestoneId: string };
+      appendWeeklyMilestoneMark(marksByMilestoneId, source.milestoneId, mark);
+    }
+  }
+
+  sortWeeklyMarkMap(marksByMilestoneId);
+  return marksByMilestoneId;
+}
+
+function mergeWeeklyMarkMaps(
+  primary: Map<string, WeeklyMilestoneMarkItem[]>,
+  secondary: Map<string, WeeklyMilestoneMarkItem[]>,
+): Map<string, WeeklyMilestoneMarkItem[]> {
+  const merged = new Map<string, WeeklyMilestoneMarkItem[]>();
+  for (const [milestoneId, marks] of primary.entries()) {
+    for (const mark of marks) {
+      appendWeeklyMilestoneMark(merged, milestoneId, mark);
+    }
+  }
+  for (const [milestoneId, marks] of secondary.entries()) {
+    for (const mark of marks) {
+      appendWeeklyMilestoneMark(merged, milestoneId, mark);
+    }
+  }
+  sortWeeklyMarkMap(merged);
+  return merged;
+}
+
+function appendWeeklyMilestoneMark(
+  target: Map<string, WeeklyMilestoneMarkItem[]>,
+  milestoneId: string,
+  mark: WeeklyMilestoneMarkItem,
+) {
+  const bucket = target.get(milestoneId) ?? [];
+  if (!bucket.some((item) => item.id === mark.id)) {
+    bucket.push(mark);
+  }
+  target.set(milestoneId, bucket);
+}
+
+function sortWeeklyMarkMap(target: Map<string, WeeklyMilestoneMarkItem[]>) {
+  for (const marks of target.values()) {
+    marks.sort(compareWeeklyMarks);
+  }
+}
+
+function enumerateWeekDates(weekStart: string, weekEnd: string) {
+  const dates: string[] = [];
+  let date = weekStart;
+  while (date <= weekEnd) {
+    dates.push(date);
+    date = shiftLocalDate(date, 1);
+  }
+  return dates;
+}
+
+function isWeeklyMilestoneMarkVisible(status: MarkInstanceStatus) {
   return (
-    mark.status === MarkInstanceStatus.Completed ||
-    mark.status === MarkInstanceStatus.PartiallyCompleted ||
-    Boolean(mark.completedAt)
+    status === MarkInstanceStatus.Planned ||
+    status === MarkInstanceStatus.Ready ||
+    status === MarkInstanceStatus.Blocked ||
+    status === MarkInstanceStatus.Active ||
+    status === MarkInstanceStatus.Completed ||
+    status === MarkInstanceStatus.PartiallyCompleted ||
+    status === MarkInstanceStatus.Skipped ||
+    status === MarkInstanceStatus.Rescheduled ||
+    status === MarkInstanceStatus.Substituted ||
+    status === MarkInstanceStatus.Expired ||
+    status === MarkInstanceStatus.Cancelled
   );
 }
 
-function compareMarks(left: MarkInstance, right: MarkInstance) {
-  return (getMarkLocalDate(left) ?? "9999-12-31").localeCompare(getMarkLocalDate(right) ?? "9999-12-31");
+function mapWeeklyMilestoneMark(mark: MarkInstance, localDate: string): WeeklyMilestoneMarkItem & { milestoneId: string } {
+  return {
+    id: mark.id,
+    title: mark.title,
+    status: mark.status as WeeklyMilestoneMarkItem["status"],
+    localDate,
+    dayLabel: formatWeekdayShortLabel(localDate),
+    isDone: mark.status === MarkInstanceStatus.Completed,
+    expeditionTitle: undefined,
+    milestoneTitle: undefined,
+    description: mark.description,
+    scheduledStartAt: mark.scheduledStartAt,
+    scheduledEndAt: mark.scheduledEndAt,
+    dueAt: mark.dueAt,
+    milestoneId: mark.milestoneId!,
+  };
 }
 
-const urgencyRank: Record<WeeklyMilestoneUrgency, number> = {
-  overdue: 0,
-  due_this_week: 1,
-  ahead: 2,
-  no_target: 3,
-};
+function formatWeekdayShortLabel(localDate: string) {
+  return new Date(`${localDate}T00:00:00.000Z`).toLocaleDateString("en-US", { weekday: "short" });
+}
+
+function compareWeeklyMarks(left: WeeklyMilestoneMarkItem, right: WeeklyMilestoneMarkItem) {
+  return (
+    left.localDate.localeCompare(right.localDate) ||
+    (left.scheduledStartAt ?? left.dueAt ?? "").localeCompare(right.scheduledStartAt ?? right.dueAt ?? "") ||
+    left.title.localeCompare(right.title)
+  );
+}
 
 function compareWeeklyMilestones(left: WeeklyMilestoneItem, right: WeeklyMilestoneItem) {
   if (left.pathRecordId !== right.pathRecordId) {
     return left.sortOrder - right.sortOrder;
   }
 
-  if (urgencyRank[left.urgency] !== urgencyRank[right.urgency]) {
-    return urgencyRank[left.urgency] - urgencyRank[right.urgency];
-  }
-
-  return (left.targetDate ?? "9999-12-31").localeCompare(right.targetDate ?? "9999-12-31") || left.sortOrder - right.sortOrder;
+  return (
+    (left.startDate ?? "9999-12-31").localeCompare(right.startDate ?? "9999-12-31") ||
+    (left.endDate ?? "9999-12-31").localeCompare(right.endDate ?? "9999-12-31") ||
+    left.sortOrder - right.sortOrder ||
+    left.title.localeCompare(right.title)
+  );
 }

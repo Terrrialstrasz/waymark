@@ -7,6 +7,7 @@ import {
 import type { SignalEngine } from "../../domain/waymark/services";
 import { getMarkMetadata, setMarkMetadata, type MarkMetadata } from "./markMetadataStore";
 import { createDailyPlanEngine } from "./dailyPlanEngine";
+import { projectConfirmedDailyPlan } from "./confirmedDailyPlanProjection";
 
 const LEGACY_AUTO_GENERATED_UNRESOLVED_STATUSES = new Set<MarkInstanceStatus>([
   MarkInstanceStatus.Planned,
@@ -111,15 +112,16 @@ export async function recomputeEffectiveTrailDayExecutionCounters(
     return recomputeTrailDayCountersForTrailDay(repos, trailDay.id);
   }
   const plan = await dailyPlanEngine.resolveEffectiveDailyPlan(userId, localDate);
-  const completedMarkCount = plan.effectiveMarks.filter(
+  const projection = plan.state?.status === "confirmed" ? projectConfirmedDailyPlan(plan) : null;
+  const completedMarkCount = projection?.completedCount ?? plan.effectiveMarks.filter(
     (mark) => mark.status === MarkInstanceStatus.Completed,
   ).length;
-  const skippedMarkCount = plan.lineages.filter(
+  const skippedMarkCount = projection?.skippedAfterConfirmCount ?? plan.lineages.filter(
     (lineage) =>
       lineage.leaf.trailDayId === trailDay.id && lineage.leaf.status === MarkInstanceStatus.Skipped,
   ).length;
   const memoryCount = (await repos.memories.listMemoriesByTrailDay(trailDay.id)).length;
-  const plannedMarkCount = plan.effectiveMarks.length;
+  const plannedMarkCount = projection?.confirmedPlannedCount ?? plan.effectiveMarks.length;
 
   if (
     trailDay.plannedMarkCount === plannedMarkCount &&

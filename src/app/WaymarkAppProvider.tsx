@@ -1,5 +1,5 @@
 import { PropsWithChildren, createContext, useContext, useEffect, useMemo, useState } from "react";
-import { Image, ImageBackground, StyleSheet, View } from "react-native";
+import { Alert, Image, ImageBackground, StyleSheet, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { getWaymarkDatabaseAsync, verifyWaymarkSchemaAsync } from "../db";
 import { createSQLiteRepositoryProvider } from "../db/adapters/SQLiteRepositories";
@@ -23,7 +23,9 @@ import {
   createStrengthProgressionService,
   createStrengthSessionEngine,
   createDailyPlanEngine,
+  reconcileLocalWeeklyPlanningMaterialization,
   type DailyPlanEngine,
+  isPulledHierarchyRequiredError,
 } from "../lib/waymark";
 import { recordWaymarkSeedCompletedAsync, runWaymarkVaultBootGateAsync } from "./waymarkVaultBootGate";
 import {
@@ -155,24 +157,57 @@ export function WaymarkAppProvider({ children }: PropsWithChildren) {
         };
         preparedServices = services;
 
-        await timeWaymarkBootstrapStep("seedMap", () =>
-          bootstrapWaymarkMap(
-            {
-              repositories,
-              userId: user.id,
-            },
-            WAYMARK_MAP_CONFIG,
-          ),
+        const fullDbState = await db.getFirstAsync<{ full_db_schema_version: number; last_cloud_revision: number }>(
+          `SELECT full_db_schema_version, last_cloud_revision
+           FROM sync_state
+           WHERE full_db_schema_version = 1 AND last_cloud_revision > 0
+           ORDER BY last_successful_sync_at DESC
+           LIMIT 1;`,
         );
-        await timeWaymarkBootstrapStep("recordSeedCompleted", () =>
-          recordWaymarkSeedCompletedAsync(db, {
-            mapVersion: WAYMARK_MAP_CONFIG.version,
-            seedVersion: WAYMARK_MAP_CONFIG.version,
-          }),
-        );
+        let hierarchyWarning: Error | null = null;
+        try {
+          await timeWaymarkBootstrapStep("seedMap", () =>
+            bootstrapWaymarkMap(
+              {
+                repositories,
+                userId: user.id,
+              },
+              WAYMARK_MAP_CONFIG,
+              { trustExistingPulledHierarchy: Boolean(fullDbState) },
+            ),
+          );
+          await timeWaymarkBootstrapStep("recordSeedCompleted", () =>
+            recordWaymarkSeedCompletedAsync(db, {
+              mapVersion: WAYMARK_MAP_CONFIG.version,
+              seedVersion: WAYMARK_MAP_CONFIG.version,
+            }),
+          );
+          if (fullDbState) {
+            const repair = await timeWaymarkBootstrapStep("fullDbPlanningRepair", () =>
+              reconcileLocalWeeklyPlanningMaterialization({ executor: db as any }),
+            );
+            if (repair.weekPlanIds.length > 0) {
+              console.info("[WaymarkBootstrap] Reconciled Full-DB planning cache", repair);
+            }
+          }
+        } catch (error) {
+          if (!isPulledHierarchyRequiredError(error)) {
+            throw error;
+          }
+          hierarchyWarning = error;
+          console.warn("[WaymarkBootstrap] Pulled hierarchy is required before seed bootstrap", error.message);
+        }
 
         if (!cancelled) {
           setState({ status: "ready", services });
+          if (hierarchyWarning) {
+            Alert.alert(
+              user.locale === "vi" ? "Can pull du lieu Waymark" : "Waymark data pull required",
+              user.locale === "vi"
+                ? `Hierarchy chua reconcile duoc voi Turso. Vao Me > Turso Sync va chay Pull Full DB.\n\n${hierarchyWarning.message}`
+                : `Hierarchy could not be reconciled with Turso. Go to Me > Turso Sync and run Pull Full DB.\n\n${hierarchyWarning.message}`,
+            );
+          }
           console.info(`[WaymarkTiming] bootstrap:total:end ${Date.now() - bootstrapStartedAt}ms`);
         }
       } catch (error) {
