@@ -43,6 +43,10 @@ function toMarkGenerationKey(importKey: string): string {
     : `weekly_planned:${importKey}`;
 }
 
+function resolveMarkGenerationKey(item: WeekPlanItem): string {
+  return item.deterministicImportKey ? toMarkGenerationKey(item.deterministicImportKey) : `weekly_planned:item:${item.id}`;
+}
+
 function isProtectedMark(mark: MarkInstance): boolean {
   return (
     mark.status === MarkInstanceStatus.Active ||
@@ -53,6 +57,15 @@ function isProtectedMark(mark: MarkInstance): boolean {
     mark.status === MarkInstanceStatus.Cancelled ||
     (mark.syncVersion ?? 0) > 0
   );
+}
+
+async function isProtectedMarkWithDetail(repos: WaymarkRepositories, mark: MarkInstance): Promise<boolean> {
+  if (isProtectedMark(mark)) {
+    return true;
+  }
+
+  const detail = await repos.marks.getMarkInstanceDetail(mark.id);
+  return Boolean(detail?.userEditedAt);
 }
 
 function isPristineUnresolvedMark(mark: MarkInstance): boolean {
@@ -108,11 +121,13 @@ async function updateLinkedWeekPlanItem(
 function buildMarkPatch(
   item: WeekPlanItem,
   generationKey: string,
+  trailDayId: string,
   currentStatus: MarkInstanceStatus,
   options: WeeklyPlannedMaterializationOptions,
 ) {
-  const description = sanitizeImportedWeeklyPlannedStorageText(item.description ?? item.note);
+  const description = sanitizeImportedWeeklyPlannedStorageText(item.description);
   return {
+    trailDayId,
     pathId: item.pathId,
     templateId: item.templateId ?? null,
     expeditionId: item.expeditionId ?? null,
@@ -148,6 +163,28 @@ function toBlockType(item: WeekPlanItem) {
   return undefined;
 }
 
+async function syncWeeklyPlannedMarkPrimer(
+  repos: WaymarkRepositories,
+  mark: MarkInstance,
+  item: WeekPlanItem,
+) {
+  const primerSnapshot = sanitizeImportedWeeklyPlannedStorageText(item.description);
+  const currentDetail = await repos.marks.getMarkInstanceDetail(mark.id);
+  // Mark Note and Primer share the detail row, so userEditedAt can be set by a
+  // note-only edit. Preserve an existing edited Primer, but still backfill a
+  // missing Primer from planning data.
+  if (currentDetail?.userEditedAt && currentDetail.primerSnapshot?.trim()) {
+    return;
+  }
+  if (currentDetail?.primerSnapshot === primerSnapshot) {
+    return;
+  }
+
+  await repos.marks.upsertMarkInstanceDetail(mark.id, {
+    primerSnapshot: primerSnapshot ?? null,
+  });
+}
+
 async function syncWeeklyPlannedMarkMetadata(
   repos: WaymarkRepositories,
   userId: string,
@@ -179,8 +216,7 @@ export async function materializeWeeklyPlannedMark(
     !item.localDate ||
     !item.startTime ||
     !item.endTime ||
-    !item.title ||
-    !item.deterministicImportKey
+    !item.title
   ) {
     return {
       outcome: "skipped",
@@ -189,12 +225,18 @@ export async function materializeWeeklyPlannedMark(
     };
   }
 
-  const generationKey = toMarkGenerationKey(item.deterministicImportKey);
+  const generationKey = resolveMarkGenerationKey(item);
   const trailDay = await repos.trailDays.getOrCreateTrailDay(userId, item.localDate);
-  const existingByKey = await repos.marks.findMarkInstanceByGenerationKey(userId, generationKey);
+  const linkedById = item.createdMarkInstanceId
+    ? await repos.marks.getMarkInstanceById(item.createdMarkInstanceId)
+    : null;
+  const existingByKey =
+    linkedById?.userId === userId
+      ? linkedById
+      : await repos.marks.findMarkInstanceByGenerationKey(userId, generationKey);
 
   if (existingByKey) {
-    if (isProtectedMark(existingByKey)) {
+    if (await isProtectedMarkWithDetail(repos, existingByKey)) {
       const protectedRepairPatch = buildProtectedMarkRepairPatch(item, existingByKey);
       const repaired =
         Object.keys(protectedRepairPatch).length > 0
@@ -202,6 +244,7 @@ export async function materializeWeeklyPlannedMark(
           : existingByKey;
 
       await updateLinkedWeekPlanItem(repos, item, repaired.id);
+      await syncWeeklyPlannedMarkPrimer(repos, repaired, item);
       await syncWeeklyPlannedMarkMetadata(repos, userId, item, repaired.id);
       return {
         outcome: "protected",
@@ -219,8 +262,9 @@ export async function materializeWeeklyPlannedMark(
       };
     }
 
-    const updated = await repos.marks.updateMarkInstance(existingByKey.id, buildMarkPatch(item, generationKey, existingByKey.status, options));
+    const updated = await repos.marks.updateMarkInstance(existingByKey.id, buildMarkPatch(item, generationKey, trailDay.id, existingByKey.status, options));
     await updateLinkedWeekPlanItem(repos, item, updated.id);
+    await syncWeeklyPlannedMarkPrimer(repos, updated, item);
     await syncWeeklyPlannedMarkMetadata(repos, userId, item, updated.id);
     return { outcome: "updated", itemId: item.id, mark: updated, finalStatus: updated.status };
   }
@@ -233,7 +277,7 @@ export async function materializeWeeklyPlannedMark(
   }
 
   if (adoptable) {
-    if (isProtectedMark(adoptable)) {
+    if (await isProtectedMarkWithDetail(repos, adoptable)) {
       return {
         outcome: "protected",
         itemId: item.id,
@@ -245,9 +289,10 @@ export async function materializeWeeklyPlannedMark(
 
     const adopted = await repos.marks.updateMarkInstance(
       adoptable.id,
-      buildMarkPatch(item, generationKey, adoptable.status, options),
+      buildMarkPatch(item, generationKey, trailDay.id, adoptable.status, options),
     );
     await updateLinkedWeekPlanItem(repos, item, adopted.id);
+    await syncWeeklyPlannedMarkPrimer(repos, adopted, item);
     await syncWeeklyPlannedMarkMetadata(repos, userId, item, adopted.id);
     return { outcome: "adopted", itemId: item.id, mark: adopted, finalStatus: adopted.status };
   }
@@ -260,7 +305,7 @@ export async function materializeWeeklyPlannedMark(
     expeditionId: item.expeditionId ?? null,
     milestoneId: item.milestoneId ?? null,
     title: item.title,
-    description: sanitizeImportedWeeklyPlannedStorageText(item.description ?? item.note) ?? null,
+    description: sanitizeImportedWeeklyPlannedStorageText(item.description) ?? null,
     origin: MarkInstanceOrigin.WeeklyPlanned,
     status: INITIAL_WEEKLY_PLANNED_MARK_STATUS,
     scheduledStartAt: buildFloatingDateTime(item.localDate, item.startTime),
@@ -271,6 +316,7 @@ export async function materializeWeeklyPlannedMark(
     proofMediaAssetIds: [],
   });
   await updateLinkedWeekPlanItem(repos, item, created.id);
+  await syncWeeklyPlannedMarkPrimer(repos, created, item);
   await syncWeeklyPlannedMarkMetadata(repos, userId, item, created.id);
   return { outcome: "created", itemId: item.id, mark: created, finalStatus: created.status };
 }

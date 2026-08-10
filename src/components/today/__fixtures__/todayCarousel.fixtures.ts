@@ -19,6 +19,9 @@ export type TodayMarkItem = {
   id: string;
   title: Record<Locale, string>;
   pathId: PathId;
+  pathEntityId?: string;
+  expeditionId?: string;
+  milestoneId?: string;
   status: TodayMarkStatus;
   interactionKind?: "default" | "strength_session" | "golf_practice";
   summary?: Record<Locale, string>;
@@ -44,11 +47,14 @@ export type TodayMarkReviewChip = {
 export type TodayMarkActionSheetConfig = {
   statusLabel?: Record<Locale, string>;
   intentionText?: Record<Locale, string>;
+  markNote?: Record<Locale, string>;
   periodLabel?: Record<Locale, string>;
   expeditionLabel?: Record<Locale, string>;
+  milestoneLabel?: Record<Locale, string>;
   signalLabel?: Record<Locale, string>;
   primaryActionLabel?: Record<Locale, string>;
   primaryActionHint?: Record<Locale, string>;
+  launchConfig?: TodayMarkLaunchConfig;
   dependencies?: TodayMarkActionSheetDependency[];
   relatedPackChecks?: TodayMarkActionSheetPackLink[];
   embeddedChecklist?: {
@@ -60,6 +66,22 @@ export type TodayMarkActionSheetConfig = {
       disabled?: boolean;
     }>;
   };
+};
+
+export type TodayMarkLaunchKind = "health_workout" | "golf_practice";
+
+export type TodayMarkLaunchOption = {
+  id: string;
+  title: Record<Locale, string>;
+  detail?: Record<Locale, string>;
+  routineTemplateId: string;
+  isDefault?: boolean;
+};
+
+export type TodayMarkLaunchConfig = {
+  kind: TodayMarkLaunchKind;
+  defaultOptionId: string;
+  options: TodayMarkLaunchOption[];
 };
 
 export type TodayMarkActionSheetDependency = {

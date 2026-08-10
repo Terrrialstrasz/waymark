@@ -99,12 +99,19 @@ export function getMilestoneStatusTone(status: MilestoneStatus) {
 
 export function getPlannedMarkStatusTone(status: PlannedMarkDetailStatus) {
   switch (status) {
-    case "done":
+    case "completed":
+    case "partially_completed":
       return "done";
-    case "missed":
+    case "skipped":
+    case "rescheduled":
+    case "substituted":
+    case "expired":
+    case "cancelled":
     case "needsRepair":
       return "missed";
-    case "upcoming":
+    case "ready":
+    case "blocked":
+    case "active":
       return "upcoming";
     default:
       return "planned";
@@ -122,12 +129,25 @@ export function getStatusLabel(
       return c.inProgress;
     case "planned":
       return c.planned;
-    case "done":
-      return c.done;
-    case "missed":
-      return c.missed;
+    case "ready":
+      return locale === "vi" ? "San sang" : "Ready";
+    case "blocked":
+      return locale === "vi" ? "Bi chan" : "Blocked";
+    case "active":
+      return c.active;
+    case "completed":
+    case "partially_completed":
+      return locale === "vi" ? "Partial" : "Partial";
     case "skipped":
-      return locale === "vi" ? "Da skip" : "Skipped";
+      return c.missed;
+    case "rescheduled":
+      return locale === "vi" ? "Da doi lich" : "Rescheduled";
+    case "substituted":
+      return locale === "vi" ? "Da thay the" : "Substituted";
+    case "expired":
+      return locale === "vi" ? "Qua han" : "Expired";
+    case "cancelled":
+      return locale === "vi" ? "Da huy" : "Cancelled";
     case "needsRepair":
       return c.needsRepair;
     case "upcoming":

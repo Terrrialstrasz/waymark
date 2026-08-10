@@ -1,13 +1,13 @@
 # Waymark Turso Planning Contract
 
-Status: Phase 0 contract locked. Production typed tables, triggers, and runtime pull are not implemented by this document.
+Status: Active planning contract. Production pull is manual, Waymark Vault is the primary DB on Turso, and ChatGPT/Planning Gateway is the intended writer for planning rows.
 
 ## 1. Architecture Boundary
 
 Waymark uses the following ownership boundary:
 
 ```text
-Turso typed planning tables = remote planning management authority
+Waymark Vault on Turso     = primary planning/hierarchy authority
 Local SQLite               = execution working state and history
 Manual Pull                = explicit planning application boundary
 ```
@@ -16,27 +16,27 @@ The first physical-table scope is:
 
 1. `week_plans`
 2. `week_plan_items`
-3. `signals`
+3. `signal_plans`
 4. `paths`
 5. `expeditions`
 6. `milestones`
 
-Primer/Mark Details, resources, media, memories, reflections, trail history, workout logs, pack-check execution, and local sync infrastructure are outside this physical planning scope. Existing generic remote records may continue to carry backup/restore projections for other canonical entities.
+Runtime `signals` are signal instances generated locally from `signal_plans`. Primer/Mark Details, resources, media, memories, reflections, trail history, workout logs, pack-check execution, signal instances, and sync infrastructure are outside this document's planning-writer scope, but remain typed tables in Turso Full-DB v2. Generic projection records are legacy-only and are not a v2 read/write path.
 
 There is no automatic planning pull, draft/publish workflow, editing state, admin replan UI, or physical-table migration for all canonical tables.
 
 ## 2. Turso Studio Contract
 
-Turso Studio is the regular replan tool for the selected planning tables. The supported operating assumption is:
+ChatGPT Web planning writes through the Waymark Planning Gateway. Turso Studio can be used as a privileged admin tool for diagnosis or emergency edits, but it must follow the same table ownership and revision rules. The supported operating assumption is:
 
 ```text
 one planning administrator
-one Turso Studio editing session at a time
+one Planning Gateway or Turso Studio editing session at a time
 no concurrent edits to the same row in multiple tabs
-Studio-to-Studio conflicts use trusted last-write-wins behavior
+admin-to-admin conflicts use trusted last-write-wins behavior
 ```
 
-Studio may edit only entity-specific planning fields. It must not edit stable IDs, `vault_id`, revision fields, generation/import keys, sync metadata, Mark runtime state, Signal runtime state, or execution history. Normal Studio use must soft-delete through `deleted_at`; privileged purge remains a separate operational path.
+Planning tools may edit only entity-specific planning fields. They must not edit stable IDs, `vault_id`, revision fields, generation/import keys, sync metadata, Mark runtime state, Signal instance runtime state, or execution history. Normal admin use must soft-delete through `deleted_at`; privileged purge remains a separate operational path.
 
 Waymark planning pushes, if enabled later, must provide an expected entity revision. Studio edits are exempt from that precondition only because of the explicit single-writer assumption.
 
@@ -95,7 +95,7 @@ The typed remote schema and field allowlists must follow current local vocabular
 |---|---|---|
 | `week_plans` | `week_start_date`, `week_end_date`, `status`, `summary`, `note`, `deleted_at` | name, label, priority |
 | `week_plan_items` | `status`, `local_date`, `start_time`, `end_time`, `title`, `description`, `note`, `sort_order`, `order_index`, current foreign keys, `deleted_at` | priority, duration, enabled |
-| `signals` | `target_type`, `target_id`, `scheduled_at`, runtime status/timestamps, `deleted_at` | `is_enabled`, recurrence, display content, notification system ID |
+| `signal_plans` | `target_type`, `target_id`, `local_date`, `scheduled_time`, `scheduled_at`, `recurrence_rule_json`, `title`, `body`, `is_enabled`, `deleted_at` | runtime ringing/snooze/resolve state |
 | `paths` | name/title/description/status/sort/active and presentation metadata | remote revision metadata |
 | `expeditions` | parent Path, title/purpose/description/status/order/date fields | remote revision metadata |
 | `milestones` | parent Expedition, title/description/status/order/date fields | remote revision metadata |
@@ -110,30 +110,42 @@ Turso owns the planning fields of activated physical `week_plans` and `week_plan
 
 `week_start_date` is immutable during normal Studio editing. A different week requires a different stable `week_plan` row.
 
-### Signal
+### Signal Plans And Instances
 
-Before the Signal physical-table phase, add a planning field equivalent to `is_enabled`.
-
-Turso owns:
+Turso owns `signal_plans`:
 
 ```text
 target_type
 target_id
+local_date
+scheduled_time
 scheduled_at
+recurrence_rule_json
+title
+body
 is_enabled
 ```
 
-Local Signal Engine owns runtime status, ringing, snooze, resolve, dismiss, expire, cancellation delivery state, and OS notification identifiers. Pull must preserve those runtime fields.
+Local Signal Engine owns runtime `signals` as signal instances: status, ringing, snooze, resolve, dismiss, expire, cancellation delivery state, and OS notification identifiers. Pull must materialize instances idempotently and preserve runtime fields.
 
-### Strategic map
+### Strategic Map
 
-`paths`, `expeditions`, and `milestones` start with update/tombstone. Remote insert opens only after stable ID defaults and same-Vault parent validation are proven.
+`paths`, `expeditions`, and `milestones` are Vault-primary hierarchy rows on Turso. Waymark mobile must pull them into Local SQLite and must not create or structurally update them.
+
+Mobile upload may only patch `expeditions` and `milestones` progress fields:
+
+```text
+expeditions: status, start_date, target_date, started_at, target_end_at, completed_at
+milestones: status, start_date, target_date, completed_at
+```
+
+That patch must be `UPDATE`-only against an existing Turso row. Missing remote ID is a conflict/failure, not an insert. Mobile upload must not change parent IDs, title, purpose, description, sort/order, hero media, created timestamps, or tombstone state.
 
 ## 7. Remote Create
 
 `week_plan_items` must support Studio insert in its physical-table phase. A remote-created item requires a database-generated or approved-tool-generated stable ID, `vault_id`, valid parent plan, valid date and status, initial entity revision, and an automatic full-snapshot change event. Title is never identity.
 
-`week_plans` initially supports update/tombstone of an existing week. Signals and strategic-map inserts are later steps after their dependency contracts are implemented.
+`week_plans` initially supports update/tombstone of an existing week. `signal_plans` support insert/update/tombstone through the Planning Gateway after target validation and idempotent materialization keys are implemented.
 
 ## 8. Mark Identity And Reconciliation
 
@@ -150,6 +162,8 @@ Current audit result: imported weekly item identity is derived from a determinis
 New Studio-created items need a generation identity derived from the stable `week_plan_item.id`, not from mutable date/time. Import/regeneration after physical cutover must preserve remote-owned planning fields and the existing Mark link.
 
 At most one Mark may be linked/materialized for one weekly item. Pull retries and full resync must update the linked Mark instead of creating another one.
+
+Human-readable duplicate names are allowed. A duplicate title is not a conflict by itself for week items, Marks, templates, expeditions, or milestones. Identity and duplicate protection come from stable IDs, `vault_id + entity_type + entity_id`, `mutation_id`, `created_mark_instance_id`, `deterministic_import_key`, and Mark `generation_key`.
 
 Current `mark_instances` has no `started_at` column. Before Phase 2 implementation, choose and migrate an explicit started marker or formally define `status = 'active'` as started. Until that migration decision is implemented, the conservative protected statuses are:
 
@@ -179,11 +193,27 @@ Each entity type has an authority mode. Once activated as `physical`, its generi
 | Phase 0 | Contract, schema audit, field ownership, trigger design, acceptance skeleton |
 | Phase 1 | `week_plans` update/tombstone and Manual Pull |
 | Phase 2 | `week_plan_items` update/insert/tombstone and unstarted Mark reconciliation |
-| Phase 3 | `signals`, `is_enabled`, target validation, post-commit notification retry |
-| Phase 4 | `paths`, then `expeditions`, then `milestones` |
-| Phase 5 | Per-entity generic/physical comparison and cutover decision |
+| Phase 3 | `signal_plans`, target validation, signal instance materialization, post-commit notification retry |
+| Phase 4 | Pull-only `paths`, `expeditions`, `milestones` from cleaned Turso hierarchy |
+| Phase 5 | Code-owned catalog projection and ChatGPT Planning Gateway API |
 
-Phase 0 does not create production remote schema, triggers, migrations, or runtime pull code.
+The foundation importer is off-mobile and idempotent by stable IDs:
+
+```text
+npm run turso:upload-foundation-from-export -- <export-dir-or-waymark.db>
+```
+
+It publishes code-owned catalog/template tables and optional weekly planning rows from a trusted export DB, while excluding cleaned Turso-primary hierarchy tables (`paths`, `expeditions`, `milestones`). The ChatGPT Planning Gateway API remains the next boundary for live planning reads/writes.
+
+The remote schema also exposes read-only context views for the Planning Gateway:
+
+- `chatgpt_week_planning_context`
+- `chatgpt_expedition_progress_context`
+- `chatgpt_milestone_mark_context`
+- `chatgpt_signal_plan_context`
+- `chatgpt_catalog_template_context`
+
+Gateway/API code should query these views instead of composing ad-hoc joins against raw tables whenever it is preparing weekly planning context.
 
 ## 11. Acceptance Test Skeleton
 

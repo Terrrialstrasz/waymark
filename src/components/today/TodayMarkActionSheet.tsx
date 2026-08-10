@@ -3,7 +3,11 @@ import { getTodayMarkPathLabels, mapTodayMarkToActionSheetMark } from "../../app
 import type { Locale, PathId } from "../../types/ui";
 import {
   PlannedMarkActionSheetContent,
+  type PlannedMarkActionValue,
+  type ExpeditionOption,
+  type MilestoneOption,
   type MoveMarkValue,
+  type PathOption,
   type QuickSubstituteValue,
   type SubstituteCandidateMark,
 } from "../planned-mark/PlannedMarkActionSheetContent";
@@ -15,15 +19,20 @@ type Props = {
   visible: boolean;
   item: TodayMarkItem | null;
   marks?: TodayMarkItem[];
+  pathOptions?: PathOption[];
+  expeditionOptions?: ExpeditionOption[];
+  milestoneOptions?: MilestoneOption[];
   locale: Locale;
+  mode?: "replan" | "execution" | "review";
+  allowPrimaryActionInReview?: boolean;
   onClose: () => void;
   onOpenDependencyMark?: (markId: string) => void;
   onOpenDependencyPackCheck?: (packCheckId: string) => void;
   onOpenSignal?: (markId: string) => void;
-  onMark?: (markId: string) => void | Promise<void>;
+  onMark?: (markId: string, value?: PlannedMarkActionValue) => void | Promise<void>;
   onMove?: (markId: string, value: MoveMarkValue) => void | Promise<void>;
   onSkip?: (markId: string) => void | Promise<void>;
-  onUpdateDetail?: (markId: string, detail: string) => void | Promise<void>;
+  onUpdateNote?: (markId: string, note: string) => void | Promise<void>;
   onToggleEmbeddedChecklistItem?: (markId: string, packCheckId: string, itemId: string, checked: boolean) => void;
   onSubstituteWithExisting?: (markId: string, substituteMarkId: string) => void | Promise<void>;
   onSubstituteWithQuickMark?: (markId: string, value: QuickSubstituteValue) => void | Promise<void>;
@@ -35,7 +44,12 @@ export function TodayMarkActionSheet({
   visible,
   item,
   marks = [],
+  pathOptions,
+  expeditionOptions = [],
+  milestoneOptions = [],
   locale,
+  mode = "execution",
+  allowPrimaryActionInReview = false,
   onClose,
   onOpenDependencyMark,
   onOpenDependencyPackCheck,
@@ -43,7 +57,7 @@ export function TodayMarkActionSheet({
   onMark,
   onMove,
   onSkip,
-  onUpdateDetail,
+  onUpdateNote,
   onToggleEmbeddedChecklistItem,
   onSubstituteWithExisting,
   onSubstituteWithQuickMark,
@@ -60,10 +74,10 @@ export function TodayMarkActionSheet({
             openDependencyMark: onOpenDependencyMark,
             openDependencyPackCheck: onOpenDependencyPackCheck,
             openSignal: onOpenSignal,
-            toggleEmbeddedChecklistItem: onToggleEmbeddedChecklistItem,
+            toggleEmbeddedChecklistItem: mode === "execution" ? onToggleEmbeddedChecklistItem : undefined,
           })
         : null,
-    [locale, onOpenDependencyMark, onOpenDependencyPackCheck, onOpenSignal, onToggleEmbeddedChecklistItem, resolvedItem],
+    [locale, mode, onOpenDependencyMark, onOpenDependencyPackCheck, onOpenSignal, onToggleEmbeddedChecklistItem, resolvedItem],
   );
 
   const substituteCandidates = useMemo<SubstituteCandidateMark[]>(
@@ -77,6 +91,17 @@ export function TodayMarkActionSheet({
           statusLabel: getStatusLabel(candidate.status, locale),
         })),
     [locale, marks, resolvedItem?.id],
+  );
+  const resolvedPathOptions = useMemo<PathOption[]>(
+    () =>
+      pathOptions && pathOptions.length > 0
+        ? pathOptions
+        : Object.entries(pathLabels[locale]).map(([id, label]) => ({
+            id,
+            label,
+            theme: getPlannedMarkPathTheme(id as PathId),
+          })),
+    [locale, pathOptions],
   );
 
   useEffect(() => {
@@ -92,14 +117,18 @@ export function TodayMarkActionSheet({
   return (
     <WMSheet contentStyle={{ paddingTop: 0, flex: 1 }} onClose={onClose} presentation="fullScreen" visible={visible}>
       <PlannedMarkActionSheetContent
-        featureFlags={{ substitutePlannedMark: true }}
+        featureFlags={{
+          substitutePlannedMark: mode !== "review",
+          markPrimaryAction: mode === "execution" || (mode === "review" && allowPrimaryActionInReview),
+          markSecondaryActions: mode !== "review",
+        }}
         layoutMode="fullScreen"
         locale={locale}
         mark={mark}
         onClose={onClose}
-        onMark={async (markId) => {
+        onMark={async (markId, value) => {
           onClose();
-          await onMark?.(markId);
+          await onMark?.(markId, value);
         }}
         onMove={async (markId, value) => {
           onClose();
@@ -109,7 +138,7 @@ export function TodayMarkActionSheet({
           onClose();
           await onSkip?.(markId);
         }}
-        onUpdateDetail={onUpdateDetail}
+        onUpdateNote={mode === "execution" ? onUpdateNote : undefined}
         onSubstituteWithExisting={
           onSubstituteWithExisting
             ? async (markId, substituteMarkId) => {
@@ -126,11 +155,9 @@ export function TodayMarkActionSheet({
               }
             : undefined
         }
-        pathOptions={Object.entries(pathLabels[locale]).map(([id, label]) => ({
-          id,
-          label,
-          theme: getPlannedMarkPathTheme(id as PathId),
-        }))}
+        expeditionOptions={expeditionOptions}
+        milestoneOptions={milestoneOptions}
+        pathOptions={resolvedPathOptions}
         substituteCandidates={substituteCandidates}
       />
     </WMSheet>

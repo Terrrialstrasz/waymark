@@ -20,6 +20,7 @@ type Props = {
   accessibilityLabel?: string;
   onBlur?: () => void;
   onEndEditing?: (event: NativeSyntheticEvent<TextInputEndEditingEventData>) => void;
+  onFocus?: () => void;
 };
 
 export function NoteInputBase({
@@ -37,6 +38,7 @@ export function NoteInputBase({
   accessibilityLabel,
   onBlur,
   onEndEditing,
+  onFocus,
 }: Props) {
   const [focused, setFocused] = useState(false);
   const multiline = variant !== "singleLine";
@@ -66,7 +68,10 @@ export function NoteInputBase({
           }}
           onChangeText={onChangeText}
           onEndEditing={onEndEditing}
-          onFocus={() => setFocused(true)}
+          onFocus={() => {
+            setFocused(true);
+            onFocus?.();
+          }}
           placeholder={placeholder}
           placeholderTextColor={inputTokens.color.placeholder}
           style={[styles.input, multiline ? styles.inputMultiline : null]}

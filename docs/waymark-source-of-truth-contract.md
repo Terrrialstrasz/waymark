@@ -1,210 +1,122 @@
-# Waymark Source-of-Truth Contract
+# Waymark Turso Full-DB v2 Source-of-Truth Contract
 
-## Governing Sentence
+## Governing sentence
 
-Waymark Vault is the logical source of truth. Local SQLite is the working copy. Turso is the structured reconciliation store. Google Drive is the media blob store. Seed is static config only.
+The existing Waymark Turso database is the sole structured-data source of truth for the Vault. Local SQLite is a disposable offline cache/working copy. Google Drive stores media blobs; Turso stores every `media_assets` metadata row.
 
-## Core Definition
+This decision supersedes the former projection model. There is no second Turso database, no new branch for the cutover, and no canonical Waymark table that remains local-only.
 
-Waymark Vault is not a new database, folder, or cloud runtime. It is the logical ownership boundary for one user's Waymark life data, identified by `vaultId`. Local SQLite, Turso, and Google Drive are storage layers governed by the Vault contract. Waymark Main and Waymark Lite are clients of the same Vault.
+## Existing live baseline
 
-## Sync Trigger Contract
+The cutover uses the Turso database already linked to the Waymark Vault.
 
-Waymark outbound sync is batch-driven. Typed Turso planning intake is Manual Pull only.
-
-Local writes must update SQLite first and may create durable `sync_outbox` rows, but outbox rows must not be drained immediately after every write. Upload/sync to Turso is allowed only through:
-
-1. Explicit EOD sync, usually after Close Trail or another user-visible end-of-day action.
-2. Explicit user action through an Upload/Sync button.
-3. A future scheduled batch job only if the user has opted in and the app shows clear sync status.
-
-Remote planning edits made in Turso reach Waymark only after the user invokes Manual Pull. The intake service captures a revision ceiling, validates and applies the coalesced planning batch to local SQLite in a transaction, then lets UI selectors refresh from local SQLite. Turso rows must not be read directly by screens as live UI state. The detailed contract is `docs/waymark-turso-planning-contract.md`.
-
-Forbidden sync triggers:
-
-- Push to Turso directly from a repository write.
-- Push to Turso directly from a screen save handler.
-- Background real-time sync after every Mark, Memory, MediaAsset, or TrailDay mutation.
-- UI waiting for Turso before rendering local data.
-- Remote realtime subscriptions deciding local UI state without first applying accepted changes to local SQLite.
-- Automatic or foreground polling for typed Turso planning edits.
-- Raw Turso console edits that skip `vault_id`, stable entity ID, revision metadata, and updated timestamp/change-log metadata.
-
-Standard local-first write flow:
-
-```text
-User action
--> local SQLite transaction
--> canonical row updated
--> sync_outbox row created
--> UI renders from local SQLite
--> outbox waits for EOD sync or explicit Upload/Sync button
-```
-
-Standard inbound remote edit flow:
-
-```text
-Turso canonical row edited
--> remote revision/change metadata advances
--> user invokes Manual Pull
--> Waymark captures a remote revision ceiling
--> local SQLite transaction validates and applies change
--> local revision/conflict state updated
--> UI renders from local SQLite selectors
-```
-
-## Layer Responsibilities
-
-| Layer | Role | Can create user records? | Can mutate user records? | Can delete user records? | Can decide final truth? | Can run during reinstall? |
-|---|---|---:|---:|---:|---:|---:|
-| Waymark Vault | Logical source-of-truth boundary for one user's Waymark world | Yes, through authorized clients and reconciliation | Yes, through authorized clients and reconciliation | Yes, through tombstone-aware rules | Yes | Yes |
-| Local SQLite | Local/offline working copy for a client | Yes, as pending local mutations | Yes, as pending local mutations | Yes, by writing tombstones | No | Yes, after provenance and restore checks |
-| Turso | Structured reconciliation store and selected planning management store used by the Vault | Yes, for activated typed planning tables through the Studio contract | Stores accepted structured mutations and trusted single-writer planning edits | Stores accepted tombstones | No, it applies the reconcile contract | Yes, through restore/sync only |
-| Google Drive | Media blob store used by the Vault | No structured records | Stores media blobs and Drive metadata | Deletes/removes media blobs only by Vault rules | No | Yes, through media restore/lazy load only |
-| Seed runner | Static config/template initializer | No | No user-owned mutation | No user-owned deletion | No | Yes, after restore gate only |
-| Sync outbox | Pending local mutation log | No direct creation outside repository writes | Tracks mutation status | Marks mutations failed/synced/conflict | No | Yes, existing pending state must be preserved |
-| Reconcile engine | Rule layer for accepted state | Accepts/rejects client mutations | Resolves or flags competing mutations | Applies tombstone rules | Yes, by contract | Yes, during restore/sync |
-| Waymark Main | Full local-first client of the Vault | Yes, via local SQLite and outbox | Yes, via local SQLite and outbox | Yes, via tombstone mutations | No | Yes |
-| Waymark Lite | Lightweight local-first client of the same Vault | Yes, via same ID/provenance/outbox rules | Yes, for allowed features | Yes, for allowed features | No | Yes |
-
-## Full Turso Projection Contract
-
-Every canonical Waymark table must have a Turso projection plan. "Canonical" means the table stores product, user, config, template, restore, or audit state that should survive device loss or be shared across Waymark clients.
-
-The projection plan has three modes:
-
-| Mode | Meaning | Turso behavior |
-|---|---|---|
-| `editable_remote` | The table may be edited from Turso and pulled into Waymark. | Requires remote revision/change-log metadata and inbound validation before local apply. |
-| `synced_readonly_remote` | Waymark pushes/restores the table, but Turso console edits are not accepted as product intent. | Remote changes are ignored, rejected, or surfaced as admin conflicts. |
-| `local_only` | The table is device/runtime-only and should not be pushed as Vault truth. | Not projected except diagnostics/export when explicitly requested. |
-
-Weekly timetable and Signal tables are first-class `editable_remote` tables:
-
-- `week_plans`
-- `week_plan_items`
-- `signals`
-
-Strategic-map tables are promoted to `editable_remote` only in their ordered planning phase:
+These three existing remote tables are protected during migration:
 
 - `paths`
 - `expeditions`
-- `milestones`
+- `mark_instances`
 
-All other canonical tables start as `synced_readonly_remote` unless a product requirement explicitly promotes them to `editable_remote`.
+Their current Turso rows are the baseline. Export migration must not insert, update, delete, tombstone, recreate, or replace them. Before and after migration, row counts and deterministic checksums must match.
 
-Technical tables such as local migration bookkeeping are `local_only`. Device-private caches, transient UI state, and temporary local files are also `local_only`.
+Every other local SQLite table is migrated into that same database. Migration uses create-if-missing plus insert-missing semantics; it never performs a blanket upsert over existing Turso rows.
 
-## Lifecycle Rules
+## Writer ownership
 
-| Lifecycle | Required behavior |
-|---|---|
-| App restart | Open local DB, run migrations, read provenance, keep existing local working copy, then run safe static seed and runtime materialization. |
-| App update | Run migrations, preserve `dbInstanceId`, `vaultId`, `deviceId`, client type, tombstones, and pending outbox rows. |
-| Fresh install | Create local DB provenance first. If restore is configured, restore Vault state before seed. If not configured, mark the DB as `fresh_local` and `local_only`. |
-| Uninstall/reinstall | App-specific local storage may be gone. Only records already synced into the Vault can be restored. Unsynced local-only records must be treated honestly as missing/unrecoverable. |
-| EOD sync | Upload media blobs first and push structured outbox mutations. Typed planning changes are not pulled automatically. |
-| Manual Upload/Sync | User explicitly drains pending outbox rows. The app must show pending/uploading/synced/failed/conflict status and must not block local UI rendering. |
-| Manual Pull | User explicitly captures a planning revision ceiling and applies the validated coalesced batch to local SQLite before UI refresh. |
-| Offline creation | Create the domain row locally and create a `sync_outbox` mutation with `vaultId`, `deviceId`, `clientType`, record type, stable ID, operation, payload, and revision. |
-| Conflict | Deterministically resolve or create a conflict state. Do not silently overwrite competing user data. |
-| Delete/tombstone | Deletes are tombstone mutations. Tombstones must prevent stale remote/local updates from resurrecting records. |
-| Media upload failure | Keep the media row in `pending_upload`, `failed`, or `missing` status. Do not pretend cloud media exists. |
-| Restore-before-seed | On a fresh DB with restore configured, restore structured Vault state and media metadata before running static seed. |
+| Data family | Authoritative writer | Waymark behavior |
+|---|---|---|
+| Paths | Workspace/admin | Pull and cache; never push from Waymark. |
+| Expedition structure | Workspace/admin | Pull and cache. Waymark may update only approved progress/status fields at EOD. |
+| Existing Marks | Turso baseline | Pull and cache. Waymark may update approved runtime fields and create only rule-authorized Marks at EOD. |
+| Milestone structure | Workspace/admin | Workspace publishes; Waymark may update approved progress/status fields at EOD. |
+| Catalog/templates | Workspace publisher | Pull and cache; mobile does not publish definitions. |
+| Week plans/items | Workspace publisher | Pull and cache; Waymark materializes allowed runtime items locally. |
+| Memories, media metadata, reflections, backlog, signals, pack/workout execution | Waymark through EOD mutation log | Write local cache/outbox first, then push typed mutations at EOD. |
+| Schema, migration, idempotency, change log, snapshot and cursor control | System | Never edited through product UI. |
 
-## Data Classification
+Field ownership is enforced in `tursoFullDatabaseContract.ts`. A writer designation is not permission to mutate every column.
 
-### Static/config/template data
+## Local cache contract
 
-- Path definitions.
-- Mark type definitions.
-- Static icon/config metadata.
-- Default pack check templates.
-- Default signal templates.
-- Static close trail rules if they are not user history.
-- Static anchor rotation templates if they are not user-owned plans.
+Screens render from local SQLite and do not query Turso directly. That makes SQLite the operational read cache, not an independent truth owner.
 
-### User-owned life data
+First synchronization:
 
-- Memories.
-- Marks.
-- Media assets.
-- Planned marks.
-- Weekly timetable imports.
-- Daily closures.
-- Reflections.
-- Judgment results.
-- Pack check runs.
-- Signal occurrences.
-- User-edited signal configs.
-- User-created or user-modified expeditions.
-- User-created or user-modified milestones.
-- Backlog items unless explicitly classified as static demo/config and disabled for production.
+```text
+Verify Full-DB schema is active
+-> capture global change ceiling
+-> pull every contracted Turso table in dependency order
+-> upsert remote rows into local SQLite in one protected write
+-> persist the global revision cursor
+-> render from SQLite
+```
 
-## Seed Contract
+Subsequent synchronization:
 
-Seed may:
+```text
+Read local global revision cursor
+-> capture a new ceiling
+-> fetch ordered change-log pages through that ceiling
+-> apply accepted snapshots/tombstones to SQLite
+-> advance cursor only after each transaction commits
+```
 
-- Upsert static/config/template data by stable key.
-- Preserve user modifications.
-- Run after migration.
-- Run after restore.
+If Full-DB metadata is absent or not `active`, Waymark refuses to treat a partial remote database as cache authority.
 
-Seed must never:
+## Outbound mutation contract
 
-- Create fake user history.
-- Create user memories.
-- Create user marks.
-- Create planned marks from production runtime unless explicitly imported by the user.
-- Create media assets.
-- Create pack check runs.
-- Create daily closures.
-- Create reflections or judgments.
-- Overwrite user-owned rows.
-- Delete user-owned rows.
-- Run before cloud restore on a fresh DB when restore is configured.
+Waymark writes the domain row and durable `sync_outbox` entry in a local transaction. It does not push on each item edit.
 
-## Boot Contract
+The production drain point is EOD, normally after Close Trail:
 
-Correct boot order:
+```text
+Close Trail commits locally
+-> load pending outbox mutations
+-> validate table writer, operation and field allowlist
+-> apply mutation to the typed Turso table
+-> record idempotency key and global change revision
+-> mark the local outbox row synced
+```
 
-1. Open/create local DB.
-2. Run migrations.
-3. Read DB provenance.
-4. Determine restore state.
-5. If fresh DB and cloud restore configured, restore Vault state first.
-6. Run safe static seed.
-7. Initialize runtime/materialization.
-8. Render app.
+Workspace-owned rows are rejected from the Waymark outbox. Unauthorized mutations become explicit conflicts; they are not silently redirected into a generic projection table.
 
-Forbidden boot order:
+## Media contract
 
-1. Open DB.
-2. Detect empty DB.
-3. Run seed.
-4. Create local user/world.
-5. Later attempt restore.
+Turso owns structured media metadata. Google Drive owns binary objects. A `media_assets` row must truthfully reflect pending, uploaded, failed or missing blob state. Pulling Full-DB can restore media metadata without claiming a missing local or Drive blob exists.
 
-## Main/Lite Contract
+## Migration safety
 
-- Waymark Main and Waymark Lite are both clients of one Vault.
-- Lite may filter display and feature access.
-- Lite must not fork truth.
-- Lite-created records must use the same stable ID, `vaultId`, `deviceId`, `clientType`, and sync metadata rules.
-- Lite display filtering must not be implemented as separate data ownership.
+The in-place migration must:
 
-## Initial Seed Classification
+1. Confirm the export Vault ID and require the same explicit Vault ID for apply.
+2. Capture a local backup of every pre-existing remote table before schema/data writes.
+3. Create control tables idempotently in the existing Turso database.
+4. Refuse apply if an existing remote table has required columns the source mapping cannot satisfy.
+5. Preserve the three protected baseline tables byte-for-byte by deterministic manifest checksum.
+6. Seed every other table using stable primary keys and `INSERT OR IGNORE`.
+7. Record per-table source count, inserted count, skipped count, checksum and status.
+8. Install typed table change-log triggers only after initial migration rows are loaded.
+9. Activate Full-DB only after all manifests verify.
 
-| Seeded entity | Classification | Production behavior | Notes |
-|---|---|---|---|
-| `paths` | `static_config_allowed` | Seed allowed | Built-in map definitions only. |
-| `markTemplates` | `template_allowed` | Seed allowed | Templates may create runtime marks later by explicit runtime rules. |
-| `packCheckTemplates` | `template_allowed` | Seed allowed | Templates only, not runs. |
-| `signalConfigs` | `template_allowed` | Seed allowed | Default templates/configs only, not occurrences. |
-| `workoutRoutines` | `template_allowed` | Seed allowed | Routine templates and exercise definitions only. |
-| `closeTrailRules` | `static_config_allowed` | Seed allowed | Static rule config only. |
-| `anchorPathRotations` | `static_config_allowed` | Seed allowed | Static template/config only. |
-| `expeditions` | `needs_decision` | Seed allowed only as built-in static map objects | User-created/user-modified expeditions must never be overwritten. |
-| `milestones` | `needs_decision` | Seed allowed only as built-in static map objects | User-created/user-modified milestones must never be overwritten. |
-| `dailyMarkAssignments` | `user_owned_blocked` | Production seed blocked | Treat as planned marks/plans, not static seed. |
-| `backlogItems` | `dev_demo_only` | Production seed blocked | May exist in fixtures/demo only, not production seed. |
+The migration command is dry-run by default:
+
+```text
+npm run turso:migrate-full-db -- --latest-export
+```
+
+Apply requires an explicit Vault confirmation:
+
+```text
+npm run turso:migrate-full-db -- --latest-export --apply --confirm-vault <vault-id>
+```
+
+## Seed and restore
+
+Seed/code may define and publish catalog data through the workspace publisher. Mobile seed must not create a parallel canonical world.
+
+On a fresh install, Waymark creates only the minimum local provenance needed to connect, then restores the Turso Full-DB snapshot before runtime materialization. Reinstall recovery is limited only by EOD mutations that were never pushed and media blobs that were never uploaded.
+
+## Semantic identity
+
+Human-readable names and titles are not unique keys. Duplicate protection uses Vault ID, stable row primary keys, mutation idempotency keys, revisions and generation lineage.
+
+Waymark Main and Waymark Lite are clients of the same Turso Vault. Lite may filter features and views but must not fork truth.

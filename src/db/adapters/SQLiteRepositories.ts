@@ -42,6 +42,7 @@ import {
   UpdateSignalPatch,
   UpdateUserProfilePatch,
   UpsertDailyMediaUploadBatchInput,
+  UpsertMarkInstanceDetailPatch,
   UserProfileRepository,
   WaymarkRepositories,
   WeekPlanRepository,
@@ -53,6 +54,7 @@ import {
   Expedition,
   MarkDependency,
   MarkInstance,
+  MarkInstanceDetail,
   MarkPackCheckRule,
   MarkTemplate,
   Memory,
@@ -84,6 +86,8 @@ import {
   SignalStatus,
   TrailDayStatus,
   UserProfile,
+  WeekPlanItemStatus,
+  WeekPlanStatus,
 } from "../../domain/waymark";
 import { WAYMARK_TABLES } from "../constants";
 import {
@@ -200,6 +204,50 @@ function generateEntityId(prefix: string): string {
 
 function generateDailyMediaUploadBatchId(localDate: string, userId: string): string {
   return `daily_${localDate}_${userId}`.replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
+type MarkInstanceDetailRow = {
+  mark_instance_id: string;
+  primer_snapshot: string | null;
+  pre_action_comment: string | null;
+  post_action_feedback: string | null;
+  user_edited_at: number | null;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  sync_status: string;
+  local_revision: number;
+};
+
+function fromDetailEpochMs(value?: number | null): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function toDetailEpochMs(value?: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const epoch = new Date(value).getTime();
+  return Number.isNaN(epoch) ? null : epoch;
+}
+
+function fromMarkInstanceDetailRow(row: MarkInstanceDetailRow): MarkInstanceDetail {
+  return {
+    id: row.mark_instance_id,
+    markInstanceId: row.mark_instance_id,
+    primerSnapshot: row.primer_snapshot ?? undefined,
+    preActionComment: row.pre_action_comment ?? undefined,
+    postActionFeedback: row.post_action_feedback ?? undefined,
+    userEditedAt: fromDetailEpochMs(row.user_edited_at),
+    createdAt: fromDetailEpochMs(row.created_at) ?? "1970-01-01T00:00:00.000Z",
+    updatedAt: fromDetailEpochMs(row.updated_at) ?? "1970-01-01T00:00:00.000Z",
+    deletedAt: fromDetailEpochMs(row.deleted_at),
+    syncVersion: row.local_revision,
+  };
 }
 
 function asArrayParams(ids: readonly string[]): string {
@@ -865,6 +913,7 @@ export class SQLiteMarkRepository extends SQLiteRepositoryBase implements MarkRe
 
       const updated: MarkInstance = this.nextUpdateMetadata({
         ...entity,
+        trailDayId: patch.trailDayId ?? entity.trailDayId,
         pathId: patch.pathId ?? entity.pathId,
         templateId: patch.templateId === undefined ? entity.templateId : patch.templateId ?? undefined,
       expeditionId: patch.expeditionId === undefined ? entity.expeditionId : patch.expeditionId ?? undefined,
@@ -904,6 +953,97 @@ export class SQLiteMarkRepository extends SQLiteRepositoryBase implements MarkRe
       markInstanceId,
     );
     return row ? fromMarkInstanceRow(row) : null;
+  }
+
+  async getMarkInstanceDetail(markInstanceId: string): Promise<MarkInstanceDetail | null> {
+    const row = await this.getFirst<MarkInstanceDetailRow>(
+      `SELECT * FROM ${WAYMARK_TABLES.markInstanceDetails}
+       WHERE mark_instance_id = ? AND deleted_at IS NULL
+       LIMIT 1;`,
+      markInstanceId,
+    );
+    return row ? fromMarkInstanceDetailRow(row) : null;
+  }
+
+  async upsertMarkInstanceDetail(
+    markInstanceId: string,
+    patch: UpsertMarkInstanceDetailPatch,
+  ): Promise<MarkInstanceDetail> {
+    const markExists = await this.activeRecordExists(WAYMARK_TABLES.markInstances, markInstanceId);
+    if (!markExists) {
+      this.validation("Mark instance detail requires an existing Mark Instance.");
+    }
+
+    const current = await this.getFirst<MarkInstanceDetailRow>(
+      `SELECT * FROM ${WAYMARK_TABLES.markInstanceDetails}
+       WHERE mark_instance_id = ?
+       LIMIT 1;`,
+      markInstanceId,
+    );
+    const now = this.getNowEpochMs();
+
+    if (!current) {
+      await this.run(
+        `INSERT INTO ${WAYMARK_TABLES.markInstanceDetails} (
+          mark_instance_id,
+          primer_snapshot,
+          pre_action_comment,
+          post_action_feedback,
+          user_edited_at,
+          created_at,
+          updated_at,
+          deleted_at,
+          sync_status,
+          local_revision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'local', 0);`,
+        markInstanceId,
+        patch.primerSnapshot ?? null,
+        patch.preActionComment ?? null,
+        patch.postActionFeedback ?? null,
+        toDetailEpochMs(patch.userEditedAt),
+        now,
+        now,
+      );
+    } else {
+      await this.run(
+        `UPDATE ${WAYMARK_TABLES.markInstanceDetails}
+         SET primer_snapshot = ?,
+             pre_action_comment = ?,
+             post_action_feedback = ?,
+             user_edited_at = ?,
+             updated_at = ?,
+             deleted_at = NULL,
+             sync_status = 'dirty',
+             local_revision = local_revision + 1
+         WHERE mark_instance_id = ?;`,
+        patch.primerSnapshot === undefined ? current.primer_snapshot : patch.primerSnapshot ?? null,
+        patch.preActionComment === undefined ? current.pre_action_comment : patch.preActionComment ?? null,
+        patch.postActionFeedback === undefined ? current.post_action_feedback : patch.postActionFeedback ?? null,
+        patch.userEditedAt === undefined ? current.user_edited_at : toDetailEpochMs(patch.userEditedAt),
+        now,
+        markInstanceId,
+      );
+    }
+
+    const row = await this.getFirst<MarkInstanceDetailRow>(
+      `SELECT * FROM ${WAYMARK_TABLES.markInstanceDetails}
+       WHERE mark_instance_id = ? AND deleted_at IS NULL
+       LIMIT 1;`,
+      markInstanceId,
+    );
+    return fromMarkInstanceDetailRow(this.assertFound(row, WAYMARK_TABLES.markInstanceDetails, markInstanceId));
+  }
+
+  async listPredecessorMarkInstances(markInstanceId: string): Promise<MarkInstance[]> {
+    const rows = await this.getAll<MarkInstanceRow>(
+      `SELECT * FROM ${WAYMARK_TABLES.markInstances}
+       WHERE (substituted_by_mark_id = ? OR rescheduled_to_mark_id = ?)
+         AND deleted_at IS NULL
+       ORDER BY created_at ASC;`,
+      markInstanceId,
+      markInstanceId,
+    );
+    return rows.map(fromMarkInstanceRow);
   }
 
   async listMarkInstancesByTrailDay(trailDayId: string): Promise<MarkInstance[]> {
@@ -1091,6 +1231,7 @@ export class SQLiteExpeditionRepository extends SQLiteStubRepository implements 
       title: input.title,
       description: input.description ?? undefined,
       status: input.status,
+      startDate: input.startDate ?? undefined,
       targetDate: input.targetDate ?? undefined,
       sortOrder: input.sortOrder,
       orderIndex: input.orderIndex,
@@ -1113,6 +1254,7 @@ export class SQLiteExpeditionRepository extends SQLiteStubRepository implements 
       title: patch.title ?? entity.title,
       description: patch.description === undefined ? entity.description : patch.description ?? undefined,
       status: patch.status ?? entity.status,
+      startDate: patch.startDate === undefined ? entity.startDate : patch.startDate ?? undefined,
       targetDate: patch.targetDate === undefined ? entity.targetDate : patch.targetDate ?? undefined,
       sortOrder: patch.sortOrder ?? entity.sortOrder,
       orderIndex: patch.orderIndex ?? entity.orderIndex,
@@ -1123,6 +1265,18 @@ export class SQLiteExpeditionRepository extends SQLiteStubRepository implements 
     const updatedRow = this.toMutableUpdate(toMilestoneRow(updated));
     await this.updateRow(WAYMARK_TABLES.milestones, updatedRow);
     return updated;
+  }
+
+  async softDeleteMilestone(milestoneId: string): Promise<void> {
+    const row = await this.getFirst<MilestoneRow>(
+      `SELECT * FROM ${WAYMARK_TABLES.milestones} WHERE id = ? AND deleted_at IS NULL LIMIT 1;`,
+      milestoneId,
+    );
+    if (!row) {
+      return;
+    }
+
+    await this.updateRow(WAYMARK_TABLES.milestones, this.toMutableDelete(row));
   }
 }
 
@@ -1848,6 +2002,25 @@ export class SQLiteWeekPlanRepository extends SQLiteStubRepository implements We
 
   async getItemById(id: string): Promise<WeekPlanItem | null> {
     const row = await this.getActiveRowById<WeekPlanItemRow>(WAYMARK_TABLES.weekPlanItems, id);
+    return row ? fromWeekPlanItemRow(row) : null;
+  }
+
+  async findActiveItemByCreatedMarkInstanceId(markInstanceId: string): Promise<WeekPlanItem | null> {
+    const row = await this.getFirst<WeekPlanItemRow>(
+      `SELECT wpi.*
+       FROM ${WAYMARK_TABLES.weekPlanItems} wpi
+       INNER JOIN ${WAYMARK_TABLES.weekPlans} wp ON wp.id = wpi.week_plan_id
+       WHERE wpi.created_mark_instance_id = ?
+         AND wpi.status <> ?
+         AND wp.status = ?
+         AND wpi.deleted_at IS NULL
+         AND wp.deleted_at IS NULL
+       ORDER BY wpi.created_at ASC
+       LIMIT 1;`,
+      markInstanceId,
+      WeekPlanItemStatus.Removed,
+      WeekPlanStatus.Active,
+    );
     return row ? fromWeekPlanItemRow(row) : null;
   }
 

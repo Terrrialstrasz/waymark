@@ -39,7 +39,7 @@ export function MeOverviewTemplate({
   const settingGroups =
     settings?.groups?.filter((group) => group.rows.length > 0 || Boolean(group.privateDocumentsCard) || Boolean(group.hubItems?.length)) ?? [];
   const hasStructuredGroups = settingGroups.length > 0;
-  const planningHubIds = new Set(["weekly-timetable", "weekly-signal", "weekly-coding", "backlog"]);
+  const planningHubIds = new Set(["weekly-timetable", "weekly-signal", "backlog"]);
   const planningHubItems = hubItems.filter((item) => planningHubIds.has(item.id));
   const standaloneHubItems = hubItems.filter((item) => !planningHubIds.has(item.id));
   const settingGroupById = new Map(settingGroups.map((group) => [group.id, group] as const));
@@ -60,7 +60,6 @@ export function MeOverviewTemplate({
           title: locale === "vi" ? "Planning" : "Planning",
           subtitle: locale === "vi" ? "Lich tuan va backlog" : "Weekly plans and backlog",
           hubItems: planningHubItems,
-          childGroups: [settingGroupById.get("prod-weekly-imports")].filter(Boolean),
           rows: [],
         },
         {
@@ -136,8 +135,8 @@ export function MeOverviewTemplate({
           reducedMotion={reducedMotion}
           subtitle={
             locale === "vi"
-              ? "Weekly Timetable, Weekly Coding va Backlog trong mot cum."
-              : "Weekly Timetable, Weekly Coding, and Backlog in one place."
+              ? "Weekly Timetable, Weekly Signal va Backlog trong mot cum."
+              : "Weekly Timetable, Weekly Signal, and Backlog in one place."
           }
           title={locale === "vi" ? "Planning" : "Planning"}
         >

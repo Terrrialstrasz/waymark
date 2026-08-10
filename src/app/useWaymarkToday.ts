@@ -33,7 +33,6 @@ import { getMarkTemplateSeedMetadata } from "../lib/waymark/markTemplateSeedStor
 import {
   optimisticallyCompleteTodayMark,
   optimisticallyCompleteTodayPackCheck,
-  optimisticallyResolveTodayMark,
   optimisticallyToggleChecklistItem,
   optimisticallyToggleTodayPackCheckItem,
   rollbackCompletedTodayMark,
@@ -45,6 +44,7 @@ import {
   type TodayData as TodayDataModel,
 } from "./todayDataLoader";
 import { resolveGolfPracticeWorkoutTypeForMarkTitle } from "../lib/waymark/golfPracticeMark";
+import { createDailyPlanEngine } from "../lib/waymark/dailyPlanEngine";
 
 type TodayData = {
   trailDayId: string;
@@ -270,55 +270,37 @@ export function useWaymarkToday(locale: Locale, options: { enabled?: boolean } =
         }
       },
       async skipMark(markId: string) {
-        let rollbackSnapshot: TodayDataModel | null = null;
-
-        setState((current) => {
-          if (current.status !== "ready") {
-            return current;
-          }
-          rollbackSnapshot = current.data;
-          return {
-            ...current,
-            data: optimisticallyResolveTodayMark(current.data, markId),
-          };
-        });
-
-        try {
-          await app.markEngine.skipMarkInstance({ markInstanceId: markId });
-        } catch (error) {
-          if (rollbackSnapshot) {
-            setState((current) => (current.status === "ready" ? { ...current, data: rollbackSnapshot! } : current));
-          }
-          throw error;
+        if (state.status === "ready" && state.data.dailyPlanMode === "replan") {
+          const localDate = getCurrentRuntimeLocalDate(app.user.timezone, new Date());
+          await (app.dailyPlanEngine ?? createDailyPlanEngine(app.repositories)).assertReplanActionAllowed(app.user.id, localDate, markId, "skip");
         }
+        await app.markEngine.skipMarkInstance({ markInstanceId: markId });
+        await loadToday({ preserveData: true });
       },
       async rescheduleMark(markId: string, value: { date: string; startTime?: string; endTime?: string }) {
-        let rollbackSnapshot: TodayDataModel | null = null;
-
-        setState((current) => {
-          if (current.status !== "ready") {
-            return current;
-          }
-          rollbackSnapshot = current.data;
-          return {
-            ...current,
-            data: optimisticallyResolveTodayMark(current.data, markId),
-          };
-        });
-
-        try {
-          await app.markEngine.rescheduleMarkInstance({
-            markInstanceId: markId,
-            targetLocalDate: value.date,
-            scheduledStartAt: value.startTime ? buildMoveDateTime(value.date, value.startTime) : undefined,
-            scheduledEndAt: value.endTime ? buildMoveDateTime(value.date, value.endTime) : undefined,
-          });
-        } catch (error) {
-          if (rollbackSnapshot) {
-            setState((current) => (current.status === "ready" ? { ...current, data: rollbackSnapshot! } : current));
-          }
-          throw error;
+        if (state.status === "ready" && state.data.dailyPlanMode === "replan") {
+          const localDate = getCurrentRuntimeLocalDate(app.user.timezone, new Date());
+          await (app.dailyPlanEngine ?? createDailyPlanEngine(app.repositories)).assertReplanActionAllowed(app.user.id, localDate, markId, "move");
         }
+        await app.markEngine.rescheduleMarkInstance({
+          markInstanceId: markId,
+          targetLocalDate: value.date,
+          scheduledStartAt: value.startTime ? buildMoveDateTime(value.date, value.startTime) : undefined,
+          scheduledEndAt: value.endTime ? buildMoveDateTime(value.date, value.endTime) : undefined,
+        });
+        await loadToday({ preserveData: true });
+      },
+      async assertReplanActionAllowed(markId: string, action: "skip" | "move" | "substitute" = "substitute") {
+        if (state.status !== "ready" || state.data.dailyPlanMode !== "replan") {
+          return;
+        }
+        const localDate = getCurrentRuntimeLocalDate(app.user.timezone, new Date());
+        await (app.dailyPlanEngine ?? createDailyPlanEngine(app.repositories)).assertReplanActionAllowed(app.user.id, localDate, markId, action);
+      },
+      async confirmDailyPlan() {
+        const localDate = getCurrentRuntimeLocalDate(app.user.timezone, new Date());
+        await (app.dailyPlanEngine ?? createDailyPlanEngine(app.repositories)).confirmReplan(app.user.id, localDate);
+        await loadToday({ preserveData: true });
       },
       async togglePackCheckItem(packCheckId: string, itemId: string, checked: boolean) {
         let rollbackSnapshot: TodayDataModel | null = null;
@@ -433,7 +415,7 @@ export function useWaymarkToday(locale: Locale, options: { enabled?: boolean } =
         void loadToday({ preserveData: true });
       },
     }),
-    [app, loadToday, refresh, state.status],
+    [app, loadToday, refresh, state],
   );
 
   return { ...state, ...actions };
@@ -609,6 +591,9 @@ function mapMarkToTodayItem(
     id: mark.id,
     title: { en: mark.title, vi: mark.title },
     pathId,
+    pathEntityId: mark.pathId,
+    expeditionId: mark.expeditionId,
+    milestoneId: mark.milestoneId,
     status,
     interactionKind: isWorkoutMark ? "strength_session" : isGolfPracticeMark ? "golf_practice" : "default",
     summary: buildMarkSummary(mark, locale),

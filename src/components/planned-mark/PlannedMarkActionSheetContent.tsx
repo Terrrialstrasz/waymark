@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { AccessibilityState, Modal, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from "react-native";
+import {
+  AccessibilityState,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Locale } from "../../types/ui";
 import { getCopy } from "../../i18n/copy";
@@ -68,11 +78,21 @@ export type PlannedMarkActionSheetMark = {
     id: string;
     label: string;
     theme: PathTheme;
+    entityId?: string;
+  };
+  expedition?: {
+    id: string;
+    label: string;
+  };
+  milestone?: {
+    id: string;
+    label: string;
   };
   periodLabel?: string;
   timeLabel?: string;
   expeditionLabel?: string;
   intentionText?: string;
+  markNote?: string;
   signalLabel?: string;
   onOpenSignal?: () => void;
   dependencies?: PlannedMarkDependencyItem[];
@@ -89,6 +109,23 @@ export type PlannedMarkActionSheetMark = {
   };
   primaryActionLabel?: string;
   primaryActionHint?: string;
+  launchConfig?: PlannedMarkLaunchConfig;
+};
+
+export type PlannedMarkLaunchKind = "health_workout" | "golf_practice";
+
+export type PlannedMarkLaunchOption = {
+  id: string;
+  title: string;
+  detail?: string;
+  routineTemplateId: string;
+  isDefault?: boolean;
+};
+
+export type PlannedMarkLaunchConfig = {
+  kind: PlannedMarkLaunchKind;
+  defaultOptionId: string;
+  options: PlannedMarkLaunchOption[];
 };
 
 export type SubstituteCandidateMark = {
@@ -104,6 +141,19 @@ export type PathOption = {
   theme?: PathTheme;
 };
 
+export type ExpeditionOption = {
+  id: string;
+  label: string;
+  pathId: string;
+};
+
+export type MilestoneOption = {
+  id: string;
+  label: string;
+  expeditionId: string;
+  pathId?: string;
+};
+
 export type MoveMarkValue = {
   date: string;
   startTime?: string;
@@ -114,27 +164,37 @@ export type QuickSubstituteValue = {
   title: string;
   detail?: string;
   pathId: string;
+  expeditionId?: string | null;
+  milestoneId?: string | null;
 };
 
-export type DialogMode = null | "mark" | "skip" | "move" | "substitute";
+export type PlannedMarkActionValue = {
+  routineTemplateId?: string;
+};
+
+export type DialogMode = null | "mark" | "launch" | "skip" | "move" | "substitute";
 
 export type PlannedMarkActionSheetContentProps = {
   mark: PlannedMarkActionSheetMark;
   locale: Locale;
   substituteCandidates?: SubstituteCandidateMark[];
   pathOptions?: PathOption[];
+  expeditionOptions?: ExpeditionOption[];
+  milestoneOptions?: MilestoneOption[];
   maxHeightOverride?: number;
   layoutMode?: "sheet" | "fullScreen";
   featureFlags?: {
     substitutePlannedMark?: boolean;
+    markPrimaryAction?: boolean;
+    markSecondaryActions?: boolean;
   };
   onClose: () => void;
-  onMark: (markId: string) => void;
+  onMark: (markId: string, value?: PlannedMarkActionValue) => void;
   onMove: (markId: string, value: MoveMarkValue) => void;
   onSubstituteWithExisting?: (markId: string, substituteMarkId: string) => void;
   onSubstituteWithQuickMark?: (markId: string, value: QuickSubstituteValue) => void;
   onSkip: (markId: string) => void;
-  onUpdateDetail?: (markId: string, detail: string) => void | Promise<void>;
+  onUpdateNote?: (markId: string, note: string) => void | Promise<void>;
 };
 
 const actionableStatuses: PlannedMarkActionSheetMarkStatus[] = [
@@ -154,6 +214,8 @@ export function PlannedMarkActionSheetContent({
   locale,
   substituteCandidates = [],
   pathOptions = [],
+  expeditionOptions = [],
+  milestoneOptions = [],
   maxHeightOverride,
   layoutMode = "sheet",
   featureFlags,
@@ -163,21 +225,27 @@ export function PlannedMarkActionSheetContent({
   onSubstituteWithExisting,
   onSubstituteWithQuickMark,
   onSkip,
-  onUpdateDetail,
+  onUpdateNote,
 }: PlannedMarkActionSheetContentProps) {
   const copy = getCopy(locale);
   const { height } = useWindowDimensions();
+  const keyboardAwareViewportHeight = useKeyboardAwareViewportHeight(height);
   const [dialogMode, setDialogMode] = useState<DialogMode>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
-  const [detailDraft, setDetailDraft] = useState("");
-  const [persistedDetail, setPersistedDetail] = useState("");
+  const [noteDraft, setNoteDraft] = useState(mark.markNote ?? "");
+  const [persistedNote, setPersistedNote] = useState(mark.markNote ?? "");
+  const [selectedLaunchOptionId, setSelectedLaunchOptionId] = useState(mark.launchConfig?.defaultOptionId ?? null);
   const isFullScreen = layoutMode === "fullScreen";
   const maxHeight = maxHeightOverride ?? Math.max(430, Math.min(height * 0.82, 820));
+  const dialogVerticalPadding = keyboardAwareViewportHeight < 520 ? spacing.sm : spacing.xl;
+  const dialogAvailableHeight = Math.max(320, keyboardAwareViewportHeight - dialogVerticalPadding * 2);
   const isActionable = actionableStatuses.includes(mark.status);
   const showSubstitute =
     isActionable &&
     featureFlags?.substitutePlannedMark === true &&
     (typeof onSubstituteWithExisting === "function" || typeof onSubstituteWithQuickMark === "function");
+  const showPrimaryAction = featureFlags?.markPrimaryAction !== false;
+  const showSecondaryActions = featureFlags?.markSecondaryActions !== false;
   const hasTimeRange = Boolean(mark.timeLabel && /[-–]/u.test(mark.timeLabel));
   const initialMoveValue = useMemo(() => getNormalizedInitialMoveValue(mark.timeLabel), [mark.timeLabel]);
   const dependencyGroups = groupDependencies(mark.dependencies ?? []);
@@ -194,45 +262,48 @@ export function PlannedMarkActionSheetContent({
     };
   }, [locale, mark]);
   useEffect(() => {
-    setDetailDraft("");
-    setPersistedDetail("");
-  }, [mark.id]);
+    setNoteDraft(mark.markNote ?? "");
+    setPersistedNote(mark.markNote ?? "");
+    setSelectedLaunchOptionId(mark.launchConfig?.defaultOptionId ?? null);
+  }, [mark.id, mark.markNote]);
 
-  const normalizedInitialDetail = persistedDetail.trim();
-  const normalizedDraftDetail = detailDraft.trim();
+  const normalizedInitialNote = persistedNote.trim();
+  const normalizedDraftNote = noteDraft.trim();
 
-  async function persistDetailDraft() {
-    if (!onUpdateDetail || normalizedDraftDetail === normalizedInitialDetail) {
+  async function persistNoteDraft() {
+    if (!onUpdateNote || normalizedDraftNote === normalizedInitialNote) {
       return;
     }
 
-    await onUpdateDetail(mark.id, detailDraft);
-    setPersistedDetail(detailDraft);
+    await onUpdateNote(mark.id, noteDraft);
+    setPersistedNote(noteDraft);
   }
 
   function handleClose() {
     void (async () => {
-      await persistDetailDraft();
+      await persistNoteDraft();
       onClose();
     })();
   }
 
-  const actions: PlannedMarkRowAction[] = [
-    {
-      key: "move",
-      label: copy.plannedMarkAction.move,
-      variant: "secondary",
-      icon: "utility.calendar",
-      onPress: () => setDialogMode("move"),
-    },
-    {
-      key: "skip",
-      label: copy.plannedMarkAction.skip,
-      variant: "secondary",
-      icon: "status.missed",
-      onPress: () => setDialogMode("skip"),
-    },
-  ];
+  const actions: PlannedMarkRowAction[] = showSecondaryActions
+    ? [
+        {
+          key: "move",
+          label: copy.plannedMarkAction.move,
+          variant: "secondary",
+          icon: "utility.calendar",
+          onPress: () => setDialogMode("move"),
+        },
+        {
+          key: "skip",
+          label: copy.plannedMarkAction.skip,
+          variant: "secondary",
+          icon: "status.missed",
+          onPress: () => setDialogMode("skip"),
+        },
+      ]
+    : [];
 
   if (showSubstitute) {
     actions.splice(1, 0, {
@@ -287,12 +358,12 @@ export function PlannedMarkActionSheetContent({
             <NoteInputBase
               accessibilityLabel={copy.plannedMarkAction.markNote}
               label={copy.plannedMarkAction.markNote}
-              onChangeText={setDetailDraft}
+              onChangeText={setNoteDraft}
               onEndEditing={() => {
-                void persistDetailDraft();
+                void persistNoteDraft();
               }}
               placeholder={copy.plannedMarkAction.markNotePlaceholder}
-              value={detailDraft}
+              value={noteDraft}
             />
           </View>
 
@@ -331,30 +402,41 @@ export function PlannedMarkActionSheetContent({
         </ScrollView>
       </View>
 
-      {isActionable ? (
+      {isActionable && (showPrimaryAction || actions.length > 0) ? (
         <View style={styles.footerWrap}>
-          <WMButton
-            fullWidth
-            label={primaryAction.label}
-            disabled={dialogBusy}
-            onPress={() => setDialogMode("mark")}
-            variant="primary"
-          />
-          {mark.primaryActionHint ?? primaryAction.hint ? (
-            <WMText style={styles.primaryHint} variant="metaCompact">
-              {mark.primaryActionHint ?? primaryAction.hint}
-            </WMText>
+          {showPrimaryAction ? (
+            <>
+              <WMButton
+                fullWidth
+                label={primaryAction.label}
+                disabled={dialogBusy}
+                onPress={() => setDialogMode(mark.launchConfig ? "launch" : "mark")}
+                variant="primary"
+              />
+              {mark.primaryActionHint ?? primaryAction.hint ? (
+                <WMText style={styles.primaryHint} variant="metaCompact">
+                  {mark.primaryActionHint ?? primaryAction.hint}
+                </WMText>
+              ) : null}
+            </>
           ) : null}
           <PlannedMarkActionRow actions={actions} theme={mark.path.theme} />
         </View>
       ) : null}
 
       <Modal transparent animationType="fade" presentationStyle="overFullScreen" statusBarTranslucent visible={Boolean(dialogMode)} onRequestClose={() => (!dialogBusy ? setDialogMode(null) : undefined)}>
-        <SafeAreaView edges={["top", "bottom"]} style={styles.dialogModalRoot}>
-          <View style={styles.dialogLayer}>
-            <Pressable disabled={dialogBusy} style={StyleSheet.absoluteFillObject} onPress={() => setDialogMode(null)} />
-            {dialogMode === "mark" ? (
-              <PlannedMarkConfirmDialog
+        <SafeAreaView
+          edges={["top", "bottom"]}
+          style={[
+            styles.dialogModalRoot,
+            Platform.OS === "web" ? { height: keyboardAwareViewportHeight } : null,
+          ]}
+        >
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.dialogKeyboardAvoiding}>
+            <View style={[styles.dialogLayer, { paddingVertical: dialogVerticalPadding }]}>
+              <Pressable disabled={dialogBusy} style={StyleSheet.absoluteFillObject} onPress={() => setDialogMode(null)} />
+              {dialogMode === "mark" ? (
+                <PlannedMarkConfirmDialog
                 body={resolvePrimaryActionBody(mark, locale, primaryAction.hint)}
                 cancelLabel={copy.plannedMarkAction.cancel}
                 confirmLabel={primaryAction.label}
@@ -366,7 +448,7 @@ export function PlannedMarkActionSheetContent({
                   }
                   setDialogBusy(true);
                   try {
-                    await persistDetailDraft();
+                    await persistNoteDraft();
                     await onMark(mark.id);
                     setDialogMode(null);
                   } finally {
@@ -375,6 +457,41 @@ export function PlannedMarkActionSheetContent({
                 }}
                 theme={mark.path.theme}
                 title={resolvePrimaryActionTitle(mark, locale, primaryAction.label)}
+                />
+              ) : null}
+            {dialogMode === "launch" && mark.launchConfig ? (
+              <PlannedMarkLaunchDialog
+                cancelLabel={copy.plannedMarkAction.cancel}
+                confirmLabel={primaryAction.label}
+                defaultBadgeLabel={locale === "vi" ? "Theo ke hoach" : "Planned"}
+                disabled={dialogBusy}
+                onCancel={() => setDialogMode(null)}
+                onConfirm={async (option) => {
+                  if (dialogBusy) {
+                    return;
+                  }
+                  setDialogBusy(true);
+                  try {
+                    await persistNoteDraft();
+                    await onMark(mark.id, { routineTemplateId: option.routineTemplateId });
+                    setDialogMode(null);
+                  } finally {
+                    setDialogBusy(false);
+                  }
+                }}
+                onSelect={setSelectedLaunchOptionId}
+                options={mark.launchConfig.options}
+                selectedOptionId={selectedLaunchOptionId ?? mark.launchConfig.defaultOptionId}
+                theme={mark.path.theme}
+                title={
+                  mark.launchConfig.kind === "golf_practice"
+                    ? locale === "vi"
+                      ? "Chon bai Golf Practice"
+                      : "Choose Golf Practice"
+                    : locale === "vi"
+                      ? "Chon bai workout"
+                      : "Choose Workout"
+                }
               />
             ) : null}
             {dialogMode === "skip" ? (
@@ -390,7 +507,7 @@ export function PlannedMarkActionSheetContent({
                   }
                   setDialogBusy(true);
                   try {
-                    await persistDetailDraft();
+                    await persistNoteDraft();
                     await onSkip(mark.id);
                     setDialogMode(null);
                   } finally {
@@ -416,7 +533,7 @@ export function PlannedMarkActionSheetContent({
                   }
                   setDialogBusy(true);
                   try {
-                    await persistDetailDraft();
+                    await persistNoteDraft();
                     await onMove(mark.id, value);
                     setDialogMode(null);
                   } finally {
@@ -436,8 +553,14 @@ export function PlannedMarkActionSheetContent({
                 choosePathLabel={copy.plannedMarkAction.choosePath}
                 emptyExistingLabel={copy.plannedMarkAction.noExistingMarksAvailable}
                 existingCandidates={substituteCandidates}
+                initialExpeditionId={mark.expedition?.id}
+                initialMilestoneId={mark.milestone?.id}
+                initialPathId={mark.path.entityId ?? mark.path.id}
                 instructionLabel={copy.plannedMarkAction.substituteInstruction}
                 locale={locale}
+                expeditionOptions={expeditionOptions}
+                milestoneOptions={milestoneOptions}
+                maxAvailableHeight={dialogAvailableHeight}
                 onCancel={() => setDialogMode(null)}
                 onSubstituteWithExisting={
                   onSubstituteWithExisting
@@ -447,7 +570,7 @@ export function PlannedMarkActionSheetContent({
                         }
                         setDialogBusy(true);
                         try {
-                          await persistDetailDraft();
+                          await persistNoteDraft();
                           await onSubstituteWithExisting(mark.id, substituteMarkId);
                           setDialogMode(null);
                         } finally {
@@ -464,7 +587,7 @@ export function PlannedMarkActionSheetContent({
                         }
                         setDialogBusy(true);
                         try {
-                          await persistDetailDraft();
+                          await persistNoteDraft();
                           await onSubstituteWithQuickMark(mark.id, value);
                           setDialogMode(null);
                         } finally {
@@ -485,9 +608,151 @@ export function PlannedMarkActionSheetContent({
                 title={copy.plannedMarkAction.substituteTitle}
               />
             ) : null}
-          </View>
+            </View>
+          </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
+    </View>
+  );
+}
+
+function useKeyboardAwareViewportHeight(fallbackHeight: number) {
+  const [viewportHeight, setViewportHeight] = useState(fallbackHeight);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined" || !window.visualViewport) {
+      setViewportHeight(fallbackHeight);
+      return;
+    }
+
+    const visualViewport = window.visualViewport;
+    const updateViewportHeight = () => {
+      setViewportHeight(Math.max(320, Math.round(visualViewport.height)));
+    };
+
+    updateViewportHeight();
+    visualViewport.addEventListener("resize", updateViewportHeight);
+    visualViewport.addEventListener("scroll", updateViewportHeight);
+
+    return () => {
+      visualViewport.removeEventListener("resize", updateViewportHeight);
+      visualViewport.removeEventListener("scroll", updateViewportHeight);
+    };
+  }, [fallbackHeight]);
+
+  return viewportHeight;
+}
+
+function PlannedMarkLaunchDialog({
+  title,
+  options,
+  selectedOptionId,
+  defaultBadgeLabel,
+  cancelLabel,
+  confirmLabel,
+  onSelect,
+  onCancel,
+  onConfirm,
+  theme,
+  disabled = false,
+}: {
+  title: string;
+  options: PlannedMarkLaunchOption[];
+  selectedOptionId: string;
+  defaultBadgeLabel: string;
+  cancelLabel: string;
+  confirmLabel: string;
+  onSelect: (optionId: string) => void;
+  onCancel: () => void;
+  onConfirm: (option: PlannedMarkLaunchOption) => void | Promise<void>;
+  theme: PlannedMarkPathTheme;
+  disabled?: boolean;
+}) {
+  const selectedOption = options.find((option) => option.id === selectedOptionId) ?? options.find((option) => option.isDefault) ?? options[0];
+  if (!selectedOption) {
+    return null;
+  }
+
+  return (
+    <View style={[styles.launchCard, { backgroundColor: foundationColors.bg.paper, borderColor: theme.border }]}>
+      <View style={styles.launchContent}>
+        <WMText style={styles.launchTitle} variant="pageTitle">
+          {title}
+        </WMText>
+        <ScrollView bounces={false} style={styles.launchOptionScroll} contentContainerStyle={styles.launchOptionList}>
+          {options.map((option) => {
+            const selected = option.id === selectedOption.id;
+            return (
+              <Pressable
+                accessibilityRole="radio"
+                accessibilityState={{ checked: selected } as AccessibilityState}
+                disabled={disabled}
+                key={option.id}
+                onPress={() => onSelect(option.id)}
+                style={({ pressed }) => [
+                  styles.launchOptionRow,
+                  {
+                    borderColor: selected ? theme.deep : theme.border,
+                    backgroundColor: selected ? theme.surfaceSoft : foundationColors.bg.paper,
+                  },
+                  pressed && !disabled ? styles.launchOptionRowPressed : null,
+                ]}
+              >
+                <View style={[styles.launchRadio, { borderColor: selected ? theme.deep : theme.border }]}>
+                  {selected ? <View style={[styles.launchRadioDot, { backgroundColor: theme.deep }]} /> : null}
+                </View>
+                <View style={styles.launchOptionText}>
+                  <View style={styles.launchOptionTitleRow}>
+                    <WMText style={styles.launchOptionTitle} variant="bodyStrong">
+                      {option.title}
+                    </WMText>
+                    {option.isDefault ? (
+                      <EntityChip label={defaultBadgeLabel} size="compact" stateTone="planned" variant="status" />
+                    ) : null}
+                  </View>
+                  {option.detail ? (
+                    <WMText style={styles.launchOptionDetail} variant="metaCompact">
+                      {option.detail}
+                    </WMText>
+                  ) : null}
+                </View>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
+      <View style={styles.launchFooter}>
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={onCancel}
+          style={({ pressed }) => [
+            styles.launchButton,
+            { backgroundColor: foundationColors.bg.paper, borderColor: theme.border },
+            disabled ? styles.buttonDisabled : null,
+            pressed && !disabled ? styles.buttonPressed : null,
+          ]}
+        >
+          <WMText style={[styles.secondaryButtonText, { color: theme.deep }]} variant="bodyStrong">
+            {cancelLabel}
+          </WMText>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={() => onConfirm(selectedOption)}
+          style={({ pressed }) => [
+            styles.launchButton,
+            { backgroundColor: theme.deep, borderColor: theme.deep },
+            disabled ? styles.buttonDisabled : null,
+            pressed && !disabled ? styles.buttonPressed : null,
+          ]}
+        >
+          <WMText style={styles.primaryButtonText} variant="bodyStrong">
+            {confirmLabel}
+          </WMText>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -981,6 +1246,100 @@ const styles = StyleSheet.create({
   primaryHint: {
     color: foundationColors.ink.secondary,
   },
+  launchCard: {
+    borderRadius: semanticRadius.sheet,
+    borderWidth: 1,
+    overflow: "hidden",
+    width: "100%",
+    maxWidth: 420,
+    alignSelf: "center",
+  },
+  launchContent: {
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
+  },
+  launchTitle: {
+    fontSize: 22,
+    lineHeight: 29,
+  },
+  launchOptionList: {
+    gap: spacing.xs,
+    paddingBottom: spacing.xs,
+  },
+  launchOptionScroll: {
+    maxHeight: 360,
+  },
+  launchOptionRow: {
+    alignItems: "center",
+    borderRadius: semanticRadius.card.compact,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 64,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  launchOptionRowPressed: {
+    opacity: 0.84,
+  },
+  launchRadio: {
+    alignItems: "center",
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 24,
+    justifyContent: "center",
+    width: 24,
+  },
+  launchRadioDot: {
+    borderRadius: 999,
+    height: 12,
+    width: 12,
+  },
+  launchOptionText: {
+    flex: 1,
+    gap: spacing.xs,
+    minWidth: 0,
+  },
+  launchOptionTitleRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
+  },
+  launchOptionTitle: {
+    flex: 1,
+  },
+  launchOptionDetail: {
+    color: foundationColors.ink.secondary,
+  },
+  launchFooter: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+  },
+  launchButton: {
+    alignItems: "center",
+    borderRadius: semanticRadius.button.default,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+  },
+  buttonPressed: {
+    opacity: 0.88,
+  },
+  buttonDisabled: {
+    opacity: 0.56,
+  },
+  primaryButtonText: {
+    color: foundationColors.ink.inverse,
+  },
+  secondaryButtonText: {
+    color: foundationColors.ink.primary,
+  },
   dialogLayer: {
     flex: 1,
     alignItems: "center",
@@ -988,6 +1347,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xl,
     backgroundColor: "rgba(43,42,34,0.26)",
+  },
+  dialogKeyboardAvoiding: {
+    flex: 1,
   },
   dialogModalRoot: {
     flex: 1,

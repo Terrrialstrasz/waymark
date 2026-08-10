@@ -84,6 +84,8 @@ export interface SubstituteMarkInstanceInput {
   substituteTitle: string;
   substituteDescription?: string;
   substitutePathId?: EntityId;
+  substituteExpeditionId?: EntityId | null;
+  substituteMilestoneId?: EntityId | null;
   substituteTrailDayId?: EntityId;
   substituteLocalDate?: LocalDateString;
   substituteScheduledStartAt?: ISODateTimeString;
@@ -323,6 +325,7 @@ export type CloseTrailReadinessReason =
   | "time_threshold_memories_or_quick_marks"
   | "no_activity"
   | "unresolved_marks"
+  | "daily_replan_not_confirmed"
   | "reopened_not_ready";
 
 export interface CloseTrailReadiness {
@@ -556,6 +559,7 @@ export interface WorkoutCycleStep {
 
 export interface StartWorkoutSessionInput {
   markInstanceId: EntityId;
+  routineTemplateId?: EntityId;
   startedAt?: ISODateTimeString;
 }
 

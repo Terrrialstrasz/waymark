@@ -4,6 +4,7 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
+    "test:daily-replan": "tsc -p tsconfig.repo-tests.json && node .tmp/repo-tests/tests/daily-replan.test.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
@@ -13,7 +14,15 @@
     "start:dev-client": "npx expo start --dev-client",
     "assets:sync:waymark-skins": "node scripts/sync-waymark-skins.mjs",
     "turso:ensure-schema": "node scripts/turso-ensure-schema.mjs",
-    "test:repo-slice": "tsc -p tsconfig.repo-tests.json && node .tmp/repo-tests/tests/repository-slice.test.js && node .tmp/repo-tests/tests/architecture-guards.test.js && node .tmp/repo-tests/tests/turso-planning-contract.test.js && node .tmp/repo-tests/tests/today-mutation-state.test.js && node .tmp/repo-tests/tests/daily-journal-view-state.test.js && node .tmp/repo-tests/tests/ssot-outbox-mvp.test.js && node .tmp/repo-tests/tests/media-sync-hardening.test.js && node .tmp/repo-tests/tests/restore-before-seed.test.js && node .tmp/repo-tests/tests/weekly-primer-ssot.test.js && node .tmp/repo-tests/tests/turso-weekly-live-intake.test.js && node .tmp/repo-tests/tests/turso-signal-live-intake.test.js && node .tmp/repo-tests/tests/turso-remote-adapter.test.js && node .tmp/repo-tests/tests/turso-sync-service.test.js && node .tmp/repo-tests/tests/turso-all-tables-bootstrap.test.js && node .tmp/repo-tests/tests/turso-planning-sync.test.js && node .tmp/repo-tests/tests/turso-hierarchy-projection-sync.test.js"
+    "turso:pull-hierarchy-workspace": "node scripts/turso-pull-hierarchy-workspace.mjs",
+    "turso:upload-weekly-plan": "tsc -p tsconfig.repo-tests.json && node scripts/turso-upload-weekly-plan-from-workspace.mjs",
+    "turso:upload-progress-from-export": "tsc -p tsconfig.repo-tests.json && node scripts/turso-upload-progress-map-from-export.mjs",
+    "turso:upload-foundation-from-export": "tsc -p tsconfig.repo-tests.json && node scripts/turso-upload-foundation-from-export.mjs",
+    "catalog:create-code-owned-export": "tsc -p tsconfig.repo-tests.json && node scripts/create-code-owned-catalog-export.mjs",
+    "turso:upload-code-owned-catalog": "tsc -p tsconfig.repo-tests.json && node scripts/create-code-owned-catalog-export.mjs .tmp/code-owned-catalog.db && node scripts/turso-upload-foundation-from-export.mjs .tmp/code-owned-catalog.db --catalog-only",
+    "turso:migrate-full-db": "tsc -p tsconfig.repo-tests.json && node scripts/turso-migrate-full-database-from-export.mjs",
+    "test:turso-full-db": "tsc -p tsconfig.repo-tests.json && node .tmp/repo-tests/tests/turso-full-database.test.js && node .tmp/repo-tests/tests/turso-pull-coordinator.test.js",
+    "test:repo-slice": "tsc -p tsconfig.repo-tests.json && node .tmp/repo-tests/tests/repository-slice.test.js && node .tmp/repo-tests/tests/architecture-guards.test.js && node .tmp/repo-tests/tests/turso-planning-contract.test.js && node .tmp/repo-tests/tests/today-mutation-state.test.js && node .tmp/repo-tests/tests/daily-journal-view-state.test.js && node .tmp/repo-tests/tests/ssot-outbox-mvp.test.js && node .tmp/repo-tests/tests/media-sync-hardening.test.js && node .tmp/repo-tests/tests/restore-before-seed.test.js && node .tmp/repo-tests/tests/weekly-primer-ssot.test.js && node .tmp/repo-tests/tests/weekly-session-review.test.js && node .tmp/repo-tests/tests/turso-weekly-live-intake.test.js && node .tmp/repo-tests/tests/turso-signal-live-intake.test.js && node .tmp/repo-tests/tests/turso-remote-adapter.test.js && node .tmp/repo-tests/tests/turso-sync-service.test.js && node .tmp/repo-tests/tests/turso-all-tables-bootstrap.test.js && node .tmp/repo-tests/tests/turso-full-database.test.js && node .tmp/repo-tests/tests/turso-pull-coordinator.test.js && node .tmp/repo-tests/tests/turso-planning-sync.test.js && node .tmp/repo-tests/tests/turso-hierarchy-projection-sync.test.js"
   },
   "dependencies": {
     "@tursodatabase/serverless": "^1.2.3",

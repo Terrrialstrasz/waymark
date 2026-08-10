@@ -1,4 +1,4 @@
-import type { BacklogItem, Expedition, MarkTemplate, Milestone, PackCheckTemplate, Path, WaymarkRepositories, WorkoutRoutineTemplate } from "../domain/waymark";
+import type { BacklogItem, Expedition, MarkTemplate, Milestone, PackCheckTemplate, Path, ProgressionPolicy, WaymarkRepositories, WorkoutRoutineTemplate } from "../domain/waymark";
 import {
   BacklogItemStatus,
   ExerciseCategory,
@@ -42,9 +42,11 @@ import {
   findSeedRecordBySource,
   listSeedRecords,
   markSeedRecordDeprecated,
+  replaceSeedRecordsForSources,
   saveSeedRecord,
 } from "./seedRegistry";
 import { canSeedEntity, type SeedPolicyOptions } from "./seedClassification";
+import { getWaymarkHierarchyBinding } from "../config/waymarkHierarchyBindings";
 
 type BootstrapContext = {
   repositories: WaymarkRepositories;
@@ -71,6 +73,33 @@ export type BootstrapResult = {
   untouched: string[];
 };
 
+export type PulledHierarchyIssue = {
+  entityType: "path" | "expedition" | "milestone";
+  sourceSeedId: string;
+  expected: string;
+  matchCount: number;
+};
+
+export class PulledHierarchyRequiredError extends Error {
+  readonly code = "WAYMARK_PULLED_HIERARCHY_REQUIRED";
+
+  constructor(readonly issues: PulledHierarchyIssue[]) {
+    const summary = issues
+      .slice(0, 3)
+      .map((issue) => `${issue.entityType} ${issue.expected}: found ${issue.matchCount}`)
+      .join("; ");
+    const remainder = issues.length > 3 ? `; and ${issues.length - 3} more` : "";
+    super(
+      `Waymark hierarchy is missing or ambiguous (${summary}${remainder}). Run Me > Turso Sync > Pull Catalog & Hierarchy before bootstrap or import.`,
+    );
+    this.name = "PulledHierarchyRequiredError";
+  }
+}
+
+export function isPulledHierarchyRequiredError(error: unknown): error is PulledHierarchyRequiredError {
+  return error instanceof PulledHierarchyRequiredError;
+}
+
 export type AuthoritativeWorkoutRoutineRepairResult = {
   repaired: {
     sourceSeedId: string;
@@ -85,6 +114,19 @@ export const GOLF_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS = [
   "golf_practice_chipping_5m_routine",
   "golf_practice_chipping_7m_routine",
   "golf_practice_chipping_3_5_7m_routine",
+  "golf_program_week_01_routine",
+  "golf_program_week_02_routine",
+  "golf_program_week_03_routine",
+  "golf_program_week_04_routine",
+  "golf_program_week_05_routine",
+  "golf_program_week_06_routine",
+  "golf_program_week_07_routine",
+  "golf_program_week_08_routine",
+  "golf_program_week_09_routine",
+  "golf_program_week_10_routine",
+  "golf_program_week_11_routine",
+  "golf_program_week_12_routine",
+  "golf_program_week_13_routine",
 ] as const;
 
 export async function repairAuthoritativeWorkoutRoutines(
@@ -199,31 +241,43 @@ export async function bootstrapWaymarkMap(
     workoutRoutineIds: new Map(),
   };
 
+  if (seedPolicy.allowHierarchySeedCreation === true) {
+    for (const pathConfig of config.paths ?? []) {
+      const key = seedKey("path", pathConfig.sourceSeedId);
+      seenSeedKeys.add(key);
+      const outcome = await upsertSeedPath(context, maps, pathConfig, config.version, now);
+      collectOutcome(key, outcome, created, updated, untouched);
+    }
+
+    for (const expeditionConfig of config.expeditions ?? []) {
+      const key = seedKey("expedition", expeditionConfig.sourceSeedId);
+      seenSeedKeys.add(key);
+      const outcome = await upsertSeedExpedition(context, maps, expeditionConfig, config.version, now);
+      collectOutcome(key, outcome, created, updated, untouched);
+    }
+
+    for (const milestoneConfig of config.milestones ?? []) {
+      const key = seedKey("milestone", milestoneConfig.sourceSeedId);
+      seenSeedKeys.add(key);
+      const outcome = await upsertSeedMilestone(context, maps, milestoneConfig, config.version, now);
+      collectOutcome(key, outcome, created, updated, untouched);
+    }
+  } else {
+    await adoptPulledHierarchy(
+      context,
+      maps,
+      config,
+      now,
+      seenSeedKeys,
+      untouched,
+      seedPolicy.trustExistingPulledHierarchy === true,
+    );
+  }
+
   await context.repositories.appSettings.setSetting(context.userId, "waymark.bootstrap.version", {
     mapVersion: config.version,
     bootstrappedAt: now,
   });
-
-  for (const pathConfig of config.paths ?? []) {
-    const key = seedKey("path", pathConfig.sourceSeedId);
-    seenSeedKeys.add(key);
-    const outcome = await upsertSeedPath(context, maps, pathConfig, config.version, now);
-    collectOutcome(key, outcome, created, updated, untouched);
-  }
-
-  for (const expeditionConfig of config.expeditions ?? []) {
-    const key = seedKey("expedition", expeditionConfig.sourceSeedId);
-    seenSeedKeys.add(key);
-    const outcome = await upsertSeedExpedition(context, maps, expeditionConfig, config.version, now);
-    collectOutcome(key, outcome, created, updated, untouched);
-  }
-
-  for (const milestoneConfig of config.milestones ?? []) {
-    const key = seedKey("milestone", milestoneConfig.sourceSeedId);
-    seenSeedKeys.add(key);
-    const outcome = await upsertSeedMilestone(context, maps, milestoneConfig, config.version, now);
-    collectOutcome(key, outcome, created, updated, untouched);
-  }
 
   for (const templateConfig of config.markTemplates ?? []) {
     const key = seedKey("mark_template", templateConfig.sourceSeedId);
@@ -308,6 +362,32 @@ export async function bootstrapWaymarkMap(
   };
 }
 
+export async function reconcilePulledHierarchySeedRegistry(
+  context: BootstrapContext,
+  config: WaymarkMapConfig,
+): Promise<{ adopted: string[] }> {
+  const maps: SeedMaps = {
+    pathIds: new Map(),
+    expeditionIds: new Map(),
+    milestoneIds: new Map(),
+    markTemplateIds: new Map(),
+    packCheckTemplateIds: new Map(),
+    backlogItemIds: new Map(),
+    workoutRoutineIds: new Map(),
+  };
+  const adopted: string[] = [];
+  await adoptPulledHierarchy(
+    context,
+    maps,
+    config,
+    new Date().toISOString(),
+    new Set<string>(),
+    adopted,
+    true,
+  );
+  return { adopted };
+}
+
 function seedKey(entityType: SeedEntityType, sourceSeedId: string) {
   return `${entityType}:${sourceSeedId}`;
 }
@@ -328,6 +408,274 @@ function collectOutcome(
     return;
   }
   untouched.push(key);
+}
+
+type PulledHierarchyAdoption = {
+  entityType: "path" | "expedition" | "milestone";
+  sourceSeedId: string;
+  entity: Path | Expedition | Milestone;
+};
+
+async function adoptPulledHierarchy(
+  context: BootstrapContext,
+  maps: SeedMaps,
+  config: WaymarkMapConfig,
+  now: string,
+  seenSeedKeys: Set<string>,
+  untouched: string[],
+  trustExistingPulledHierarchy: boolean,
+): Promise<void> {
+  const issues: PulledHierarchyIssue[] = [];
+  const adoptions: PulledHierarchyAdoption[] = [];
+  const seedRecords = await listSeedRecords(context.repositories.appSettings, context.userId);
+  const seedRecordByEntity = new Map(
+    seedRecords.map((record) => [`${record.entityType}:${record.entityId}`, record] as const),
+  );
+  const activePaths = await context.repositories.paths.listActivePaths(context.userId);
+
+  const acceptPulledEntity = <TEntity extends Path | Expedition | Milestone>(input: {
+    entityType: PulledHierarchyAdoption["entityType"];
+    sourceSeedId: string;
+    expected: string;
+    entity: TEntity | null;
+    trustedBindingId?: string;
+  }): TEntity | null => {
+    if (!input.entity) {
+      issues.push({
+        entityType: input.entityType,
+        sourceSeedId: input.sourceSeedId,
+        expected: input.expected,
+        matchCount: 0,
+      });
+      return null;
+    }
+    const entity = input.entity;
+    const seedRecord = seedRecordByEntity.get(`${input.entityType}:${entity.id}`);
+    const matchesTrustedBinding = input.trustedBindingId === entity.id;
+    if (
+      seedRecord &&
+      seedRecord.ownership !== "remote_primary" &&
+      !matchesTrustedBinding &&
+      !trustExistingPulledHierarchy
+    ) {
+      issues.push({
+        entityType: input.entityType,
+        sourceSeedId: input.sourceSeedId,
+        expected: `${input.expected} (pulled canonical row required)`,
+        matchCount: 0,
+      });
+      return null;
+    }
+    return entity;
+  };
+
+  const acceptUniquePulledEntity = <TEntity extends Path | Expedition | Milestone>(input: {
+    entityType: PulledHierarchyAdoption["entityType"];
+    sourceSeedId: string;
+    expected: string;
+    matches: TEntity[];
+    issueWhenMissing?: boolean;
+  }): TEntity | null => {
+    if (input.matches.length !== 1) {
+      if (input.issueWhenMissing ?? true) {
+        issues.push({
+          entityType: input.entityType,
+          sourceSeedId: input.sourceSeedId,
+          expected: input.expected,
+          matchCount: input.matches.length,
+        });
+      }
+      return null;
+    }
+    return acceptPulledEntity({
+      entityType: input.entityType,
+      sourceSeedId: input.sourceSeedId,
+      expected: input.expected,
+      entity: input.matches[0]!,
+    });
+  };
+
+  for (const pathConfig of config.paths ?? []) {
+    const binding = getWaymarkHierarchyBinding("path", pathConfig.sourceSeedId);
+    const boundPath = binding ? activePaths.find((item) => item.id === binding.id) ?? null : null;
+    const path =
+      boundPath ?
+        acceptPulledEntity({
+          entityType: "path",
+          sourceSeedId: pathConfig.sourceSeedId,
+          expected: `Turso path id "${binding!.id}"`,
+          entity: boundPath,
+          trustedBindingId: binding!.id,
+        })
+      : acceptUniquePulledEntity({
+          entityType: "path",
+          sourceSeedId: pathConfig.sourceSeedId,
+          expected: `slug "${pathConfig.slug}"`,
+          matches: activePaths.filter(
+            (item) => normalizeHierarchyIdentity(item.slug) === normalizeHierarchyIdentity(pathConfig.slug),
+          ),
+        });
+    if (!path) {
+      continue;
+    }
+    maps.pathIds.set(pathConfig.sourceSeedId, path.id);
+    adoptions.push({ entityType: "path", sourceSeedId: pathConfig.sourceSeedId, entity: path });
+  }
+
+  const expeditionsByPath = new Map<string, Expedition[]>();
+  for (const expeditionConfig of config.expeditions ?? []) {
+    const pathId = maps.pathIds.get(expeditionConfig.pathSeedId);
+    if (!pathId) {
+      continue;
+    }
+    let expeditions = expeditionsByPath.get(pathId);
+    if (!expeditions) {
+      expeditions = (await context.repositories.expeditions.listExpeditionsByPath(pathId)).items;
+      expeditionsByPath.set(pathId, expeditions);
+    }
+    const binding = getWaymarkHierarchyBinding("expedition", expeditionConfig.sourceSeedId);
+    let expedition: Expedition | null = null;
+    if (binding?.parentId === pathId) {
+      const boundExpedition = expeditions.find((item) => item.id === binding.id && item.pathId === pathId) ?? null;
+      if (boundExpedition) {
+        expedition = acceptPulledEntity({
+          entityType: "expedition",
+          sourceSeedId: expeditionConfig.sourceSeedId,
+          expected: `Turso expedition id "${binding.id}"`,
+          entity: boundExpedition,
+          trustedBindingId: binding.id,
+        });
+      }
+    }
+    if (!expedition) {
+      let matches = expeditions.filter(
+        (item) => normalizeHierarchyIdentity(item.title) === normalizeHierarchyIdentity(expeditionConfig.title),
+      );
+      if (matches.length > 1) {
+        const statusMatches = matches.filter((item) => item.status === expeditionConfig.status);
+        if (statusMatches.length > 0) {
+          matches = statusMatches;
+        }
+      }
+      if (matches.length > 1 && (expeditionConfig.startDate || expeditionConfig.targetDate)) {
+        const dateMatches = matches.filter(
+          (item) =>
+            (!expeditionConfig.startDate || item.startDate === expeditionConfig.startDate) &&
+            (!expeditionConfig.targetDate || item.targetDate === expeditionConfig.targetDate),
+        );
+        if (dateMatches.length > 0) {
+          matches = dateMatches;
+        }
+      }
+      expedition = acceptUniquePulledEntity({
+        entityType: "expedition",
+        sourceSeedId: expeditionConfig.sourceSeedId,
+        expected: `"${expeditionConfig.title}" under path ${expeditionConfig.pathSeedId}`,
+        matches,
+        issueWhenMissing: false,
+      });
+    }
+    if (!expedition) {
+      continue;
+    }
+    maps.expeditionIds.set(expeditionConfig.sourceSeedId, expedition.id);
+    adoptions.push({
+      entityType: "expedition",
+      sourceSeedId: expeditionConfig.sourceSeedId,
+      entity: expedition,
+    });
+  }
+
+  const milestonesByExpedition = new Map<string, Milestone[]>();
+  for (const milestoneConfig of config.milestones ?? []) {
+    const expeditionId = maps.expeditionIds.get(milestoneConfig.expeditionSeedId);
+    if (!expeditionId) {
+      continue;
+    }
+    let milestones = milestonesByExpedition.get(expeditionId);
+    if (!milestones) {
+      milestones = await context.repositories.expeditions.listMilestonesByExpedition(expeditionId);
+      milestonesByExpedition.set(expeditionId, milestones);
+    }
+    const binding = getWaymarkHierarchyBinding("milestone", milestoneConfig.sourceSeedId);
+    let milestone: Milestone | null = null;
+    if (binding?.parentId === expeditionId) {
+      const boundMilestone = milestones.find((item) => item.id === binding.id && item.expeditionId === expeditionId) ?? null;
+      if (boundMilestone) {
+        milestone = acceptPulledEntity({
+          entityType: "milestone",
+          sourceSeedId: milestoneConfig.sourceSeedId,
+          expected: `Turso milestone id "${binding.id}"`,
+          entity: boundMilestone,
+          trustedBindingId: binding.id,
+        });
+      }
+    }
+    if (!milestone) {
+      let matches = milestones.filter(
+        (item) => normalizeHierarchyIdentity(item.title) === normalizeHierarchyIdentity(milestoneConfig.title),
+      );
+      if (matches.length > 1) {
+        const statusMatches = matches.filter((item) => item.status === milestoneConfig.status);
+        if (statusMatches.length > 0) {
+          matches = statusMatches;
+        }
+      }
+      if (matches.length > 1 && (milestoneConfig.startDate || milestoneConfig.targetDate)) {
+        const dateMatches = matches.filter(
+          (item) =>
+            (!milestoneConfig.startDate || item.startDate === milestoneConfig.startDate) &&
+            (!milestoneConfig.targetDate || item.targetDate === milestoneConfig.targetDate),
+        );
+        if (dateMatches.length > 0) {
+          matches = dateMatches;
+        }
+      }
+      milestone = acceptUniquePulledEntity({
+        entityType: "milestone",
+        sourceSeedId: milestoneConfig.sourceSeedId,
+        expected: `"${milestoneConfig.title}" under expedition ${milestoneConfig.expeditionSeedId}`,
+        matches,
+        issueWhenMissing: false,
+      });
+    }
+    if (!milestone) {
+      continue;
+    }
+    maps.milestoneIds.set(milestoneConfig.sourceSeedId, milestone.id);
+    adoptions.push({
+      entityType: "milestone",
+      sourceSeedId: milestoneConfig.sourceSeedId,
+      entity: milestone,
+    });
+  }
+
+  if (issues.length > 0) {
+    throw new PulledHierarchyRequiredError(issues);
+  }
+
+  const adoptedRecords = adoptions.map((adoption) =>
+    buildSeedRecord(
+      adoption.entityType,
+      adoption.entity.id,
+      adoption.sourceSeedId,
+      config.version,
+      adoption.entity.syncVersion ?? 0,
+      "remote_primary",
+      now,
+    ),
+  );
+  await replaceSeedRecordsForSources(context.repositories.appSettings, context.userId, adoptedRecords);
+
+  for (const adoption of adoptions) {
+    const key = seedKey(adoption.entityType, adoption.sourceSeedId);
+    seenSeedKeys.add(key);
+    untouched.push(key);
+  }
+}
+
+function normalizeHierarchyIdentity(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
 }
 
 async function upsertSeedPath(
@@ -535,6 +883,7 @@ async function upsertSeedMilestone(
       title: config.title,
       description: config.description ?? null,
       status: config.status,
+      startDate: config.startDate ?? null,
       targetDate: config.targetDate ?? null,
       sortOrder: config.sortOrder,
       orderIndex: config.orderIndex,
@@ -557,6 +906,7 @@ async function upsertSeedMilestone(
       title: config.title,
       description: config.description ?? null,
       status: config.status,
+      startDate: config.startDate ?? null,
       targetDate: config.targetDate ?? null,
       sortOrder: config.sortOrder,
       orderIndex: config.orderIndex,
@@ -588,6 +938,7 @@ async function upsertSeedMilestone(
     entity.status !== config.status ||
     entity.sortOrder !== config.sortOrder ||
     entity.orderIndex !== config.orderIndex ||
+    (entity.startDate ?? null) !== (config.startDate ?? null) ||
     (entity.targetDate ?? null) !== (config.targetDate ?? null);
   if (!changed) {
     await saveSeedRecord(context.repositories.appSettings, context.userId, {
@@ -602,6 +953,7 @@ async function upsertSeedMilestone(
     title: config.title,
     description: config.description ?? null,
     status: config.status,
+    startDate: config.startDate ?? null,
     targetDate: config.targetDate ?? null,
     sortOrder: config.sortOrder,
     orderIndex: config.orderIndex,
@@ -920,6 +1272,7 @@ async function rebuildSeedWorkoutRoutine(
 const DEFAULT_AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS = [
   "health_day_a_routine",
   "health_day_b_routine",
+  "health_bodyweight_rep_progress_routine",
 ] as const;
 
 const AUTHORITATIVE_WORKOUT_ROUTINE_REPAIR_SEED_IDS = new Set<string>([
@@ -940,6 +1293,7 @@ type WorkoutRoutineExerciseSignature = {
   targetDistanceM?: number;
   targetSteps?: number;
   restDurationSec?: number;
+  progressionPolicy?: ProgressionPolicy;
 };
 
 type LegacyWorkoutRoutineExerciseSignature = Omit<WorkoutRoutineExerciseSignature, "id">;
@@ -979,6 +1333,7 @@ async function listWorkoutRoutineExerciseSignatures(context: BootstrapContext, r
       targetDistanceM: exercise.targetDistanceM,
       targetSteps: exercise.targetSteps,
       restDurationSec: exercise.restDurationSec,
+      progressionPolicy: exercise.progressionPolicy,
     });
   }
   return signatures;
@@ -997,6 +1352,7 @@ function routineMatchesSeedConfig(config: SeedWorkoutRoutineConfig, actual: Work
     targetDistanceM: exercise.targetDistanceM,
     targetSteps: exercise.targetSteps,
     restDurationSec: exercise.restDurationSec,
+    progressionPolicy: exercise.progressionPolicy,
   }));
 
   return exerciseSignaturesMatch(
@@ -1038,7 +1394,8 @@ function exerciseSignaturesMatch(actual: WorkoutRoutineExerciseSignature[], expe
       actualExercise.targetDurationSec === expectedExercise.targetDurationSec &&
       actualExercise.targetDistanceM === expectedExercise.targetDistanceM &&
       actualExercise.targetSteps === expectedExercise.targetSteps &&
-      actualExercise.restDurationSec === expectedExercise.restDurationSec
+      actualExercise.restDurationSec === expectedExercise.restDurationSec &&
+      JSON.stringify(actualExercise.progressionPolicy ?? null) === JSON.stringify(expectedExercise.progressionPolicy ?? null)
     );
   });
 }
@@ -1060,7 +1417,8 @@ function legacyExerciseSignaturesMatch(actual: WorkoutRoutineExerciseSignature[]
       actualExercise.targetDurationSec === expectedExercise.targetDurationSec &&
       actualExercise.targetDistanceM === expectedExercise.targetDistanceM &&
       actualExercise.targetSteps === expectedExercise.targetSteps &&
-      actualExercise.restDurationSec === expectedExercise.restDurationSec
+      actualExercise.restDurationSec === expectedExercise.restDurationSec &&
+      JSON.stringify(actualExercise.progressionPolicy ?? null) === JSON.stringify(expectedExercise.progressionPolicy ?? null)
     );
   });
 }
@@ -1479,6 +1837,7 @@ async function upsertRoutineExercises(
       targetDistanceM: exercise.targetDistanceM,
       targetSteps: exercise.targetSteps,
       restDurationSec: exercise.restDurationSec,
+      progressionPolicy: exercise.progressionPolicy,
       createdAt: now,
       updatedAt: now,
     });

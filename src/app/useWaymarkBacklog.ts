@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BacklogItemViewModel } from "../components/backlog/types";
 import { MarkDetailItem } from "../components/mark-detail/model";
 import type { BacklogItem, Path } from "../domain/waymark";
-import { BacklogItemHorizon, BacklogItemStatus, BacklogItemType, MediaAssetOwnerType, WeekPlanItemStatus, WeekPlanStatus } from "../domain/waymark/enums";
+import { BacklogItemHorizon, BacklogItemStatus, BacklogItemType, MediaAssetOwnerType } from "../domain/waymark/enums";
 import type { Locale, PathId } from "../types/ui";
 import { useWaymarkApp } from "./WaymarkAppProvider";
-import { findPathByUiPathId, formatLocalDate, getWeekEndDate, getWeekStartDate, mapUiPathId, pathLabelById } from "./waymarkUi";
+import { findPathByUiPathId, formatLocalDate, mapUiPathId, pathLabelById } from "./waymarkUi";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
 import type { CaptureMediaAttachment } from "../types/capture";
 import { saveMediaAssetsForOwner } from "./waymarkMediaPipeline";
@@ -156,52 +156,6 @@ export function useWaymarkBacklog(locale: Locale, options: { enabled?: boolean }
           });
         }
         void localDate;
-        refresh();
-      },
-      async addToCurrentWeek(itemId: string) {
-        const item = state.items.find((entry) => entry.id === itemId);
-        if (!item) {
-          return;
-        }
-
-        const weekStartDate = getWeekStartDate(formatLocalDate(new Date(), app.user.timezone), app.user.weekStartsOn);
-        const weekEndDate = getWeekEndDate(weekStartDate);
-        const existingWeekPlan =
-          (await app.repositories.weekPlans.getByWeekStart(app.user.id, weekStartDate)) ??
-          (await app.repositories.weekPlans.upsertWeekPlan({
-            id: createLocalId("week_plan"),
-            userId: app.user.id,
-            weekStartDate,
-            weekEndDate,
-            status: WeekPlanStatus.Active,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          }));
-
-        const existingItems = await app.repositories.weekPlans.listItems(existingWeekPlan.id);
-        const existing = existingItems.find(
-          (entry) => entry.backlogItemId === item.id && entry.status !== WeekPlanItemStatus.Removed,
-        );
-
-        if (!existing) {
-          await app.repositories.weekPlans.upsertItems([
-            {
-              id: createLocalId("week_plan_item"),
-              weekPlanId: existingWeekPlan.id,
-              backlogItemId: item.id,
-              status: WeekPlanItemStatus.Pulled,
-              sortOrder: existingItems.length,
-              orderIndex: existingItems.length,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-          ]);
-        }
-
-        await app.repositories.backlog.upsert({
-          ...item,
-          status: BacklogItemStatus.Pulled,
-        });
         refresh();
       },
     }),

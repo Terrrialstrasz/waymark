@@ -52,7 +52,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
   };
 }
 
@@ -236,6 +236,7 @@ export async function importWeeklyTimetable20260622To0628(
     weekEndDate: "2026-06-28",
     note: "Imported from final weekly timetable 2026-06-22 to 2026-06-28 with source-seed resolved project and milestone IDs.",
     importBatchId: "weekly_timetable_2026_06_22_2026_06_28_final_seed_ids",
+    allowTitleRefs: true,
     items: buildWeeklyTimetable20260622To0628(catalog),
   });
   const { packChecks, signals } = await ensureWeeklySignals(services, userId, timezone, report);

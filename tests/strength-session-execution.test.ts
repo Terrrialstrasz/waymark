@@ -146,23 +146,23 @@ async function runTests() {
   {
     let session = createDayBStrengthScenario("en");
     session = advanceStrengthSession(session, "complete_strength_set");
-    assert.equal(getExercise(session, "wide-grip-lat-pulldown").restTimer?.totalSeconds, 90);
+    assert.equal(getExercise(session, "barbell-deadlift").restTimer?.totalSeconds, 90);
     session = advanceStrengthSession(session, "start_next_set");
     session = advanceStrengthSession(session, "complete_strength_set");
 
-    assert.equal(session.activeExerciseId, "wide-grip-lat-pulldown");
+    assert.equal(session.activeExerciseId, "barbell-deadlift");
     assert.equal(getStrengthSessionPrimaryAction(session).actionType, "next_exercise");
 
     session = advanceStrengthSession(session, "next_exercise");
 
-    assert.equal(session.activeExerciseId, "wood-chop");
-    assert.equal(getExercise(session, "wood-chop").state, "active");
-    assert.equal(getSet(session, "wood-chop", 1).state, "active");
+    assert.equal(session.activeExerciseId, "bent-over-barbell-row");
+    assert.equal(getExercise(session, "bent-over-barbell-row").state, "active");
+    assert.equal(getSet(session, "bent-over-barbell-row", 1).state, "active");
 
     session = advanceStrengthSession(session, "complete_strength_set");
 
-    assert.equal(getExercise(session, "wood-chop").state, "done");
-    assert.equal(getStrengthSessionPrimaryAction(session).actionType, "next_exercise");
+    assert.equal(getExercise(session, "bent-over-barbell-row").state, "rest");
+    assert.equal(getStrengthSessionPrimaryAction(session).actionType, "start_next_set");
   }
 
   {

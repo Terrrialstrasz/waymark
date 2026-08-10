@@ -3,6 +3,7 @@ import type { SeedEntityType } from "./types";
 export type SeedClassification =
   | "static_config_allowed"
   | "template_allowed"
+  | "remote_primary_required"
   | "user_owned_blocked"
   | "dev_demo_only"
   | "needs_decision";
@@ -13,6 +14,8 @@ export type SeedPolicyOptions = {
   mode?: SeedRuntimeMode;
   includeDevDemoSeed?: boolean;
   includeBlockedUserOwnedSeed?: boolean;
+  allowHierarchySeedCreation?: boolean;
+  trustExistingPulledHierarchy?: boolean;
 };
 
 export type SeedClassificationReportRow = {
@@ -25,21 +28,21 @@ export type SeedClassificationReportRow = {
 export const SEED_CLASSIFICATION_REPORT: readonly SeedClassificationReportRow[] = [
   {
     entityType: "path",
-    classification: "static_config_allowed",
-    productionBehavior: "seed_allowed",
-    notes: "Built-in map definitions only.",
+    classification: "remote_primary_required",
+    productionBehavior: "seed_blocked",
+    notes: "Turso-primary hierarchy. Runtime bootstrap may only adopt a unique pulled row; creation is test-only.",
   },
   {
     entityType: "expedition",
-    classification: "needs_decision",
-    productionBehavior: "conditional",
-    notes: "Allowed only as built-in static map objects with stable identity; user-created or user-modified expeditions must win.",
+    classification: "remote_primary_required",
+    productionBehavior: "seed_blocked",
+    notes: "Turso-primary hierarchy. Runtime bootstrap may only adopt a unique pulled row; creation is test-only.",
   },
   {
     entityType: "milestone",
-    classification: "needs_decision",
-    productionBehavior: "conditional",
-    notes: "Allowed only as built-in static map objects with stable identity; user-created or user-modified milestones must win.",
+    classification: "remote_primary_required",
+    productionBehavior: "seed_blocked",
+    notes: "Turso-primary hierarchy. Runtime bootstrap may only adopt a unique pulled row; creation is test-only.",
   },
   {
     entityType: "mark_template",
@@ -101,6 +104,9 @@ export function classifySeedEntity(entityType: SeedEntityType): SeedClassificati
 
 export function canSeedEntity(entityType: SeedEntityType, options: SeedPolicyOptions = {}): boolean {
   const classification = classifySeedEntity(entityType);
+  if (classification === "remote_primary_required") {
+    return options.allowHierarchySeedCreation === true;
+  }
   if (classification === "user_owned_blocked") {
     return options.includeBlockedUserOwnedSeed === true;
   }

@@ -6,6 +6,7 @@ import {
   ExerciseTargetType,
   MarkTemplateType,
   MilestoneStatus,
+  ProgressionPolicyType,
   RecurrenceKind,
   WorkoutExercisePhase,
   WorkoutRoutineType,
@@ -19,9 +20,74 @@ import type {
   WaymarkMapConfig,
 } from "./types";
 import { PACK_CHECK_CATALOG } from "../config/packCheckCatalog";
+import { GOLF_PROGRAM_WEEKS, golfProgramRoutineTitle, type GolfProgramSetPlan, type GolfProgramWeek } from "../config/golfProgramCatalog";
 
 const WEEKDAYS = [1, 2, 3, 4, 5];
 const SUPERVISING_CHECKLIST = ["Check Zalo", "Check mail", "Check Confluence", "Check Jira"];
+
+function golfRoutineMarkTemplateSeedId(routineSeedId: string) {
+  return `${routineSeedId}_mark_template`;
+}
+
+const GOLF_PRACTICE_MARK_TEMPLATES: SeedMarkTemplateConfig[] = [
+  {
+    routineSeedId: "golf_practice_putting_routine",
+    title: "Golf Practice Putting 23 Putts",
+    description: "Golf Craft putting prescription: 60 cm x3, 90 cm x1, 120 cm x2, 150 cm x2, 180 cm x15.",
+    defaultDurationMin: 25,
+  },
+  {
+    routineSeedId: "golf_practice_chipping_3m_routine",
+    title: "Golf Practice Chipping 3 m",
+    description: "Golf Craft chipping: 3 sets x 8 reps, land inside 1.2 m zone and hit Flagsticky.",
+    defaultDurationMin: 30,
+  },
+  {
+    routineSeedId: "golf_practice_chipping_5m_routine",
+    title: "Golf Practice Chipping 5 m",
+    description: "Golf Craft chipping: 3 sets x 8 reps, land inside 2.0 m zone and hit Flagsticky.",
+    defaultDurationMin: 30,
+  },
+  {
+    routineSeedId: "golf_practice_chipping_7m_routine",
+    title: "Golf Practice Chipping 7 m",
+    description: "Golf Craft chipping: 3 sets x 8 reps, land inside 2.8 m zone and hit Flagsticky.",
+    defaultDurationMin: 30,
+  },
+  {
+    routineSeedId: "golf_practice_chipping_3_5_7m_routine",
+    title: "Golf Practice Chipping 3-5-7 m",
+    description: "Golf Craft chipping test: 6 sets x 4 reps across 3 m, 5 m, and 7 m.",
+    defaultDurationMin: 30,
+  },
+  ...GOLF_PROGRAM_WEEKS.map((week) => ({
+    routineSeedId: week.routineSeedId,
+    title: golfProgramRoutineTitle(week),
+    description: `Golf Craft program week ${week.weekNumber}: ${week.description}`,
+    defaultDurationMin: week.weekNumber === 1 ? 30 : 35,
+  })),
+  {
+    routineSeedId: "golf_practice_swing_routine",
+    title: "Golf Practice Swing",
+    description: "Log-only Golf Craft swing practice.",
+    defaultDurationMin: 35,
+  },
+].map((template) => ({
+  sourceSeedId: golfRoutineMarkTemplateSeedId(template.routineSeedId),
+  pathSeedId: "golf",
+  title: template.title,
+  description: template.description,
+  templateType: MarkTemplateType.Workout,
+  recurrenceRule: { kind: RecurrenceKind.Manual },
+  defaultDurationMin: template.defaultDurationMin,
+  isActive: true,
+  generation: {
+    blockType: "workout_block",
+    source: "weekly_coding",
+    appearsInToday: true,
+    countsAsPathProof: true,
+  },
+}));
 
 const SCH_EXPEDITION_SEED_ID = "career.sch.expedition.smart-counter-hub-project";
 const SCH_ONBOARDING_MERGE_FLOW_MILESTONE_SEED_ID = "career.sch.milestone.2026-06.international-card-onboarding-merge-flow";
@@ -101,7 +167,7 @@ const PACK_CHECK_TEMPLATE_CONFIGS: SeedPackCheckTemplateConfig[] = PACK_CHECK_CA
   })),
 }));
 
-function buildSharedCooldownStretchExercises(routinePrefix: "day_a" | "day_a2" | "day_b" | "walk", startOrderIndex = 5) {
+function buildSharedCooldownStretchExercises(routinePrefix: "day_a" | "day_a2" | "day_b" | "walk" | "bodyweight_rep_progress", startOrderIndex = 5) {
   return SHARED_COOLDOWN_STRETCH_BLUEPRINT.map((stretch, index) => ({
     sourceSeedId: `${routinePrefix}_${stretch.sourceSeedId}`,
     exerciseTitle: stretch.exerciseTitle,
@@ -199,6 +265,63 @@ function buildGolfChippingTestExercises() {
       })),
     ),
   );
+}
+
+function buildGolfProgramExercises(week: GolfProgramWeek): SeedRoutineExerciseConfig[] {
+  const previousWeek = week.weekNumber > 1 ? GOLF_PROGRAM_WEEKS[week.weekNumber - 2] : undefined;
+  const revisionExercise = previousWeek
+    ? [
+        golfProgramExercise(
+          week,
+          "revision",
+          1,
+          1,
+          previousWeek.mainReps,
+          previousWeek.title,
+          6,
+        ),
+      ]
+    : [];
+  const practiceStartOrder = previousWeek ? 7 : 6;
+  const practiceExercises = Array.from({ length: week.mainSets }, (_, index) =>
+    golfProgramExercise(
+      week,
+      "practice",
+      index + 1,
+      week.mainSets,
+      week.mainReps,
+      week.title,
+      practiceStartOrder + index,
+    ),
+  );
+
+  return [
+    ...buildGolfWarmupExercises(`program_week_${String(week.weekNumber).padStart(2, "0")}`),
+    ...revisionExercise,
+    ...practiceExercises,
+  ];
+}
+
+function golfProgramExercise(
+  week: GolfProgramWeek,
+  role: GolfProgramSetPlan["role"],
+  setNumber: number,
+  totalSets: number,
+  reps: number,
+  title: string,
+  orderIndex: number,
+): SeedRoutineExerciseConfig {
+  const weekKey = String(week.weekNumber).padStart(2, "0");
+  return {
+    sourceSeedId: `${role}_${setNumber}`,
+    exerciseTitle: `${role === "revision" ? "Revision" : "Practice"} ${setNumber}/${totalSets}: ${title}`,
+    canonicalSlug: `golf-program-week-${weekKey}-${role}-${setNumber}`,
+    phase: WorkoutExercisePhase.Strength,
+    orderIndex,
+    targetType: ExerciseTargetType.RepsOnly,
+    targetReps: reps,
+    targetSets: 1,
+  };
 }
 
 function careerAssignment(input: {
@@ -1009,6 +1132,29 @@ function seededMilestone(
   };
 }
 
+function seededWeeklyMilestone(
+  sourceSeedId: string,
+  expeditionSeedId: string,
+  title: string,
+  startDate: string,
+  targetDate: string,
+  sortOrder: number,
+  status: MilestoneStatus = MilestoneStatus.Planned,
+  description?: string,
+): SeedMilestoneConfig {
+  return {
+    sourceSeedId,
+    expeditionSeedId,
+    title,
+    description: description ?? `Expedition: ${expeditionSeedId}`,
+    status,
+    sortOrder,
+    orderIndex: sortOrder,
+    startDate,
+    targetDate,
+  };
+}
+
 const MASTER_MILESTONES: SeedMilestoneConfig[] = [
   seededMilestone(SCH_ONBOARDING_MERGE_FLOW_MILESTONE_SEED_ID, SCH_EXPEDITION_SEED_ID, "Phát hànhThẻ GNQT — Ghép luồng Onboarding", "2026-06-20", 0, MilestoneStatus.Active, "Expedition: SCH"),
   seededMilestone(SMB_CARD_MILESTONE_SEED_ID, SCH_EXPEDITION_SEED_ID, "OBD Thẻ GNQT — Quản lý sự đồng ý của KH", "2026-07-31", 1, MilestoneStatus.Active, "Expedition: SCH"),
@@ -1029,24 +1175,105 @@ const MASTER_MILESTONES: SeedMilestoneConfig[] = [
   seededMilestone("career.sch.milestone.2026-12.card-interest-fee-collection-reversal", SCH_EXPEDITION_SEED_ID, "GD lãi/phí thẻ — thu và hủy", "2026-12-31", 16, MilestoneStatus.Active, "Expedition: SCH"),
   seededMilestone("snag.growth.milestone.dashboard-analysis", "snag.growth.expedition", "Tạo Dashboard phân tích bài", "2026-06-30", 0),
   seededMilestone("snag.growth.milestone.content-foundation", "snag.growth.expedition", "Content foundation", "2026-07-30", 1),
-  seededMilestone("family.english.milestone.grammar-book", "family.english.expedition", "Đọc xong sách ngữ pháp tiếng Anh cho con", "2026-07-30", 0),
+  seededMilestone("family.english.milestone.grammar-book", "family.english.expedition", "Đọc xong sách ngữ pháp tiếng Anh cho con", "2026-07-30", 0, MilestoneStatus.Archived),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-1", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 1", "2026-08-10", "2026-08-16", 1),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-2", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 2", "2026-08-17", "2026-08-23", 2),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-3", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 3", "2026-08-24", "2026-08-30", 3),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-4", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 4", "2026-08-31", "2026-09-06", 4),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-5", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 5", "2026-09-07", "2026-09-13", 5),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-6", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 6", "2026-09-14", "2026-09-20", 6),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-7", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 7", "2026-09-21", "2026-09-27", 7),
+  seededWeeklyMilestone("family.english.oxford-phonics-world-4.unit-8", "family.english.expedition", "Dạy con Oxford Phonics World 4 — Unit 8", "2026-09-28", "2026-10-04", 8),
   seededMilestone("family.weekend.milestone.golf-tournament-memory", "family.weekend.expedition", "Family golf memory / tournament day", "2026-06-27", 0),
-  seededMilestone("family.weekend.milestone.lotus-festival-west-lake", "family.weekend.expedition", "Family memory — Tây Hồ", "2026-06-28", 1),
-  seededMilestone("family.rhythm.milestone.weekend-recovery", "family.rhythm.expedition", "Recovery sau weekend di chuyển nhiều", "2026-06-28", 0),
-  seededMilestone("family.vietnam-trip.milestone.ninh-binh", "family.vietnam-trip.expedition", "Ninh Bình tháng 9/2026", "2026-09-01", 0),
-  seededMilestone("family.waymark.milestone.anniversary-edition", "family.waymark.expedition", "Xây dựng Waymark Anniversary edition", "2026-06-12", 0),
+  seededMilestone("family.weekend.milestone.lotus-festival-west-lake", "family.weekend.expedition", "Family memory", undefined, 0, MilestoneStatus.Archived),
+  seededWeeklyMilestone("family.weekend.living-room-furniture-shopping", "family.weekend.expedition", "Mua sắm nội thất phòng khách cùng gia đình", "2026-08-03", "2026-08-09", 1, MilestoneStatus.Active),
+  seededMilestone("family.rhythm.milestone.weekend-recovery", "family.rhythm.expedition", "Recovery sau weekend di chuyển nhiều", "2026-06-28", 0, MilestoneStatus.Archived),
+  seededMilestone("family.vietnam-trip.milestone.ninh-binh", "family.vietnam-trip.expedition", "Ninh Bình", "2026-09-01", 0),
+  seededMilestone("family.waymark.milestone.anniversary-edition", "family.waymark.expedition", "Xây dựng Waymark Anniversary edition", "2026-06-12", 0, MilestoneStatus.Archived),
+  seededWeeklyMilestone("family.building-waymark.weekly-milestone", "family.waymark.expedition", "Weekly Milestone", "2026-08-03", "2026-08-09", 1, MilestoneStatus.Active),
+  seededWeeklyMilestone("family.building-waymark.chuan-hoa-golf-mark-flow", "family.waymark.expedition", "Chuẩn hóa Golf Mark flow", "2026-08-10", "2026-08-16", 2),
+  seededWeeklyMilestone("family.building-waymark.job-xu-ly-11-nam-ky-niem", "family.waymark.expedition", "Job xử lý 11 năm kỷ niệm", "2026-08-17", "2026-08-23", 3),
+  seededWeeklyMilestone("family.building-waymark.switch-skins", "family.waymark.expedition", "Switch skins", "2026-08-24", "2026-08-30", 4),
+  seededWeeklyMilestone("family.building-waymark.chuc-nang-xoa-anh-gallery-da-upload", "family.waymark.expedition", "Chức năng xóa ảnh Gallery đã upload", "2026-08-31", "2026-09-06", 5),
+  seededWeeklyMilestone("family.building-waymark.waymark-lite-ios", "family.waymark.expedition", "Waymark Lite iOS", "2026-09-07", "2026-09-13", 6),
+  seededMilestone("family.tony-golf.little-easy-1-epga", "family.tony-golf.expedition", "Tony học Little Easy 1 ở EPGA", undefined, 0, MilestoneStatus.Planned),
+  seededWeeklyMilestone("family.tony-golf.hanwha-life-vga-junior-tour-2-nghe-an", "family.tony-golf.expedition", "Hanwha Life - VGA Junior Tour #2 Nghệ An", "2026-06-26", "2026-06-28", 1, MilestoneStatus.Completed),
+  seededWeeklyMilestone("family.tony-golf.vjo-quang-ninh", "family.tony-golf.expedition", "Giải VJO ở Quảng Ninh", "2026-07-09", "2026-07-11", 2, MilestoneStatus.Completed),
+  seededWeeklyMilestone(
+    "career.ba-core.ba-enablement-foundation",
+    "career.ba-core.expedition",
+    "Hoàn thành BA Enablement nền tảng",
+    "2026-08-03",
+    "2026-08-09",
+    0,
+    MilestoneStatus.Active,
+    "Deck phải hoàn thành: #0 BA Enablement Overview; #1 Elicitation & Stakeholder; #2 Requirement Governance & Feature Shaping",
+  ),
+  seededWeeklyMilestone(
+    "career.ba-core.requirement-solution-design",
+    "career.ba-core.expedition",
+    "Hoàn thành Requirement & Solution Design",
+    "2026-08-10",
+    "2026-08-16",
+    1,
+    MilestoneStatus.Planned,
+    "Deck phải hoàn thành: #3 Requirement Hierarchy & Lifecycle; #4 Functional Decomposition & Planning; #5 IT Architecture, Data & Integration; #6 UI & Flow Specification",
+  ),
+  seededWeeklyMilestone(
+    "career.ba-core.flow-acceptance-ai-ba",
+    "career.ba-core.expedition",
+    "Hoàn thành Flow, Acceptance & AI BA",
+    "2026-08-17",
+    "2026-08-23",
+    2,
+    MilestoneStatus.Planned,
+    "Deck phải hoàn thành: #7 Operational Flow; #8 System/API/Data Flow; #9 Error, Outcome, NFR & Acceptance; #10 AI-assisted BA & Review",
+  ),
   seededMilestone("health.cut70.milestone.76kg", "health.cut70.expedition", "Reach 76kg", "2026-06-30", 0),
-  seededMilestone("health.cut70.milestone.75kg", "health.cut70.expedition", "Reach 75kg", "2026-07-31", 1),
-  seededMilestone("health.cut70.milestone.74kg", "health.cut70.expedition", "Reach 74kg", "2026-08-31", 2),
-  seededMilestone("health.cut70.milestone.73kg", "health.cut70.expedition", "Reach 73kg", "2026-09-30", 3),
-  seededMilestone("health.cut70.milestone.72kg", "health.cut70.expedition", "Reach 72kg", "2026-10-31", 4),
-  seededMilestone("health.cut70.milestone.71kg", "health.cut70.expedition", "Reach 71kg", "2026-11-30", 5),
-  seededMilestone("health.cut70.milestone.70kg", "health.cut70.expedition", "Reach 70kg", "2026-12-31", 6),
+  seededWeeklyMilestone("health.cut70.milestone.75kg", "health.cut70.expedition", "Reach 75kg", "2026-08-03", "2026-08-09", 1, MilestoneStatus.Active),
+  seededWeeklyMilestone("health.cut70.milestone.74kg", "health.cut70.expedition", "Reach 74.5kg", "2026-08-10", "2026-08-16", 2),
+  seededWeeklyMilestone("health.cut70.milestone.73kg", "health.cut70.expedition", "Reach 74kg", "2026-08-17", "2026-08-23", 3),
+  seededWeeklyMilestone("health.cut70.milestone.72kg", "health.cut70.expedition", "Reach 73.5kg", "2026-08-24", "2026-08-30", 4),
+  seededWeeklyMilestone("health.cut70.milestone.71kg", "health.cut70.expedition", "Reach 73kg", "2026-08-31", "2026-09-06", 5),
+  seededWeeklyMilestone("health.cut70.milestone.70kg", "health.cut70.expedition", "Reach 72.5kg", "2026-09-07", "2026-09-13", 6),
   seededMilestone("golf.beginning.milestone.home-snag-phase", "golf.beginning.expedition", "Home and SNAG practice phase", "2026-08-15", 0),
+  seededWeeklyMilestone("golf.beginning.weekly.snag-chipping", "golf.beginning.expedition", "SNAG Chipping", "2026-08-10", "2026-08-16", 1, MilestoneStatus.Planned, "Chip thẳng, kiểm soát landing + roll"),
+  seededWeeklyMilestone("golf.beginning.weekly.snag-pitching", "golf.beginning.expedition", "SNAG Pitching", "2026-08-17", "2026-08-23", 2, MilestoneStatus.Planned, "Pitch bóng bổng và kiểm soát landing"),
+  seededWeeklyMilestone("golf.beginning.weekly.snag-full-swing-iron", "golf.beginning.expedition", "SNAG Full Swing Iron", "2026-08-24", "2026-08-30", 3, MilestoneStatus.Planned, "Thực hiện full swing kiểu iron ổn định"),
+  seededWeeklyMilestone("golf.beginning.weekly.snag-full-swing-driver", "golf.beginning.expedition", "SNAG Full Swing Driver", "2026-08-31", "2026-09-06", 4, MilestoneStatus.Planned, "Thực hiện full swing kiểu driver ổn định"),
+  seededWeeklyMilestone("golf.beginning.weekly.chipping-sw-pw", "golf.beginning.expedition", "Chipping SW + PW", "2026-09-07", "2026-09-13", 5, MilestoneStatus.Planned, "Cùng một chip motion với 2 gậy"),
+  seededWeeklyMilestone("golf.beginning.weekly.chipping-8i", "golf.beginning.expedition", "Chipping 8i", "2026-09-14", "2026-09-20", 6, MilestoneStatus.Planned, "Hoàn thành bộ 3 chipping shots: SW / PW / 8i"),
+  seededWeeklyMilestone("golf.beginning.weekly.stock-pitch-sw-pw", "golf.beginning.expedition", "Stock Pitch SW + PW", "2026-09-21", "2026-09-27", 7, MilestoneStatus.Planned, "Kiểm soát stock pitching với 2 gậy"),
+  seededWeeklyMilestone("golf.beginning.weekly.short-pitch-sw-pw", "golf.beginning.expedition", "Short Pitch SW + PW", "2026-09-28", "2026-10-04", 8, MilestoneStatus.Planned, "Chủ động tạo khoảng cách pitch ngắn"),
+  seededWeeklyMilestone("golf.beginning.weekly.long-pitch-sw-pw", "golf.beginning.expedition", "Long Pitch SW + PW", "2026-10-05", "2026-10-11", 9, MilestoneStatus.Planned, "Hoàn thành 6 pitching shots = 3 lengths × 2 clubs"),
+  seededWeeklyMilestone("golf.beginning.weekly.full-swing-sw-pw", "golf.beginning.expedition", "Full Swing SW + PW", "2026-10-12", "2026-10-18", 10, MilestoneStatus.Planned, "Stock full swing với 2 wedge"),
+  seededWeeklyMilestone("golf.beginning.weekly.full-swing-8i-6i", "golf.beginning.expedition", "Full Swing 8i + 6i", "2026-10-19", "2026-10-25", 11, MilestoneStatus.Planned, "Full swing ổn định với iron"),
+  seededWeeklyMilestone("golf.beginning.weekly.full-swing-hybrid", "golf.beginning.expedition", "Full Swing Hybrid", "2026-10-26", "2026-11-01", 12, MilestoneStatus.Planned, "Hoàn thành 5 full-swing clubs: SW / PW / 8i / 6i / Hybrid"),
+  seededWeeklyMilestone("golf.beginning.weekly.driver", "golf.beginning.expedition", "Driver", "2026-11-02", "2026-11-08", 13, MilestoneStatus.Planned, "Tạo driver setup + full swing có thể chơi được"),
 ];
 
+function normalizeGolfProgramMilestones(milestones: SeedMilestoneConfig[]): SeedMilestoneConfig[] {
+  const programWeekBySeedId = new Map(GOLF_PROGRAM_WEEKS.map((week) => [week.milestoneSeedId, week] as const));
+  return milestones.map((milestone) => {
+    const week = programWeekBySeedId.get(milestone.sourceSeedId);
+    if (!week) {
+      return milestone;
+    }
+    return {
+      ...milestone,
+      title: week.title,
+      description: week.description,
+      status: week.weekNumber === 1 ? MilestoneStatus.Active : MilestoneStatus.Planned,
+      sortOrder: week.weekNumber,
+      orderIndex: week.weekNumber,
+      startDate: week.startDate,
+      targetDate: week.endDate,
+    };
+  });
+}
+
 export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
-  version: 10,
+  version: 13,
   paths: [
     { sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 },
     { sourceSeedId: "snag", slug: "snag-golf-vietnam", title: "SNAG Golf Vietnam", sortOrder: 1 },
@@ -1078,14 +1305,15 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
       title: "Dạy con Tiếng Anh",
       status: ExpeditionStatus.Active,
       sortOrder: 0,
+      targetDate: "2026-10-04",
     },
     {
       sourceSeedId: "family.waymark.expedition",
-      pathSeedId: "family",
+      pathSeedId: "character",
       title: "Building Waymark",
       status: ExpeditionStatus.Active,
       sortOrder: 1,
-      targetDate: "2026-06-12",
+      targetDate: "2026-09-13",
     },
     {
       sourceSeedId: "family.weekend.expedition",
@@ -1093,13 +1321,13 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
       title: "Family Weekend",
       status: ExpeditionStatus.Active,
       sortOrder: 2,
-      targetDate: "2026-06-28",
+      targetDate: "2026-08-09",
     },
     {
       sourceSeedId: "family.rhythm.expedition",
       pathSeedId: "family",
       title: "Family rhythm",
-      status: ExpeditionStatus.Active,
+      status: ExpeditionStatus.Archived,
       sortOrder: 3,
       targetDate: "2026-06-28",
     },
@@ -1110,6 +1338,20 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
       status: ExpeditionStatus.Active,
       sortOrder: 4,
       targetDate: "2026-09-01",
+    },
+    {
+      sourceSeedId: "family.tony-golf.expedition",
+      pathSeedId: "family",
+      title: "Tony Golf",
+      status: ExpeditionStatus.Active,
+      sortOrder: 5,
+    },
+    {
+      sourceSeedId: "career.ba-core.expedition",
+      pathSeedId: "career",
+      title: "Transfer kiến thức BA lên Core",
+      status: ExpeditionStatus.Active,
+      sortOrder: 1,
     },
     {
       sourceSeedId: "health.cut70.expedition",
@@ -1129,7 +1371,7 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
       targetDate: "2026-09-15",
     },
   ],
-  milestones: MASTER_MILESTONES,
+  milestones: normalizeGolfProgramMilestones(MASTER_MILESTONES),
   markTemplates: [
     {
       sourceSeedId: "career.weekday.focus_block_1",
@@ -1449,6 +1691,27 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
       },
     },
     {
+      sourceSeedId: "health_bodyweight_rep_progress_manual",
+      pathSeedId: "health",
+      title: "Home Workout",
+      templateType: MarkTemplateType.Workout,
+      recurrenceRule: { kind: RecurrenceKind.Weekly, daysOfWeek: [3] },
+      isActive: true,
+      generation: {
+        startDate: "2026-08-06",
+        scheduledTime: "08:05",
+        scheduledEndTime: "08:45",
+        orderIndex: 5,
+        blockType: "workout_block",
+        source: "generated_by_engine",
+        appearsInToday: true,
+        countsAsPathProof: true,
+        expeditionSeedId: "health.cut70.expedition",
+        milestoneSeedId: "health.cut70.milestone.76kg",
+        milestoneSourceSeedId: "health.cut70.milestone.76kg",
+      },
+    },
+    {
       sourceSeedId: "health_weekly_weight",
       pathSeedId: "health",
       title: "Weekly Weight Input",
@@ -1468,6 +1731,7 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
         calendarDates: ["2026-07-04", "2026-10-03", "2027-01-02", "2027-04-03", "2027-07-03", "2027-10-02"],
       },
     },
+    ...GOLF_PRACTICE_MARK_TEMPLATES,
     ...schLifecycleArchetypes,
     ...familyWeekendTemplates,
   ],
@@ -1845,8 +2109,111 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
       ],
     },
     {
+      sourceSeedId: "health_bodyweight_rep_progress_routine",
+      pathSeedId: "health",
+      markTemplateSeedId: "health_bodyweight_rep_progress_manual",
+      title: "Home Workout",
+      routineType: WorkoutRoutineType.Strength,
+      estimatedDurationMin: 40,
+      isActive: true,
+      exercises: [
+        {
+          sourceSeedId: "pushup",
+          exerciseTitle: "Push-up",
+          canonicalSlug: "bodyweight-push-up",
+          phase: WorkoutExercisePhase.Strength,
+          orderIndex: 0,
+          targetType: ExerciseTargetType.RepsOnly,
+          targetReps: 10,
+          targetSets: 1,
+        },
+        {
+          sourceSeedId: "side_plank_rotation_left",
+          exerciseTitle: "Side Plank Rotation — Left",
+          canonicalSlug: "bodyweight-side-plank-rotation-left",
+          phase: WorkoutExercisePhase.Strength,
+          orderIndex: 1,
+          targetType: ExerciseTargetType.RepsOnly,
+          targetReps: 5,
+          targetSets: 1,
+          progressionPolicy: {
+            type: ProgressionPolicyType.FixedIncrement,
+            repIncrement: 1,
+            repCeiling: 12,
+            successfulSessionsRequired: 1,
+          },
+        },
+        {
+          sourceSeedId: "side_plank_rotation_right",
+          exerciseTitle: "Side Plank Rotation — Right",
+          canonicalSlug: "bodyweight-side-plank-rotation-right",
+          phase: WorkoutExercisePhase.Strength,
+          orderIndex: 2,
+          targetType: ExerciseTargetType.RepsOnly,
+          targetReps: 5,
+          targetSets: 1,
+          progressionPolicy: {
+            type: ProgressionPolicyType.FixedIncrement,
+            repIncrement: 1,
+            repCeiling: 12,
+            successfulSessionsRequired: 1,
+          },
+        },
+        {
+          sourceSeedId: "plank",
+          exerciseTitle: "Plank",
+          canonicalSlug: "bodyweight-plank",
+          phase: WorkoutExercisePhase.Strength,
+          orderIndex: 3,
+          targetType: ExerciseTargetType.Timed,
+          targetDurationSec: 50,
+          targetSets: 1,
+          progressionPolicy: {
+            type: ProgressionPolicyType.TimeIncrease,
+            durationIncrementSec: 1,
+            durationCeilingSec: 60,
+            successfulSessionsRequired: 1,
+          },
+        },
+        {
+          sourceSeedId: "burpee",
+          exerciseTitle: "Burpee",
+          canonicalSlug: "bodyweight-burpee",
+          phase: WorkoutExercisePhase.Strength,
+          orderIndex: 4,
+          targetType: ExerciseTargetType.RepsOnly,
+          targetReps: 10,
+          targetSets: 1,
+          progressionPolicy: {
+            type: ProgressionPolicyType.FixedIncrement,
+            repIncrement: 1,
+            repCeiling: 25,
+            successfulSessionsRequired: 1,
+          },
+        },
+        {
+          sourceSeedId: "inverted_row",
+          exerciseTitle: "Inverted Row",
+          canonicalSlug: "bodyweight-inverted-row",
+          phase: WorkoutExercisePhase.Strength,
+          orderIndex: 5,
+          targetType: ExerciseTargetType.RepsOnly,
+          targetReps: 12,
+          targetSets: 1,
+          progressionPolicy: {
+            type: ProgressionPolicyType.FixedIncrement,
+            repIncrement: 1,
+            repCeiling: 20,
+            successfulSessionsRequired: 1,
+          },
+        },
+        ...buildSharedCooldownStretchExercises("bodyweight_rep_progress", 6),
+      ],
+    },
+    {
       sourceSeedId: "golf_practice_putting_routine",
       pathSeedId: "golf",
+      markTemplateSeedId: golfRoutineMarkTemplateSeedId("golf_practice_putting_routine"),
       title: "Golf Practice Putting 23 Putts",
       description: "Golf Craft putting prescription: 60 cm x3, 90 cm x1, 120 cm x2, 150 cm x2, 180 cm x15.",
       routineType: WorkoutRoutineType.GolfPractice,
@@ -1860,6 +2227,7 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
     {
       sourceSeedId: "golf_practice_chipping_3m_routine",
       pathSeedId: "golf",
+      markTemplateSeedId: golfRoutineMarkTemplateSeedId("golf_practice_chipping_3m_routine"),
       title: "Golf Practice Chipping 3 m",
       description: "Golf Craft chipping: 3 sets x 8 reps, land inside 1.2 m zone and hit Flagsticky.",
       routineType: WorkoutRoutineType.GolfPractice,
@@ -1873,6 +2241,7 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
     {
       sourceSeedId: "golf_practice_chipping_5m_routine",
       pathSeedId: "golf",
+      markTemplateSeedId: golfRoutineMarkTemplateSeedId("golf_practice_chipping_5m_routine"),
       title: "Golf Practice Chipping 5 m",
       description: "Golf Craft chipping: 3 sets x 8 reps, land inside 2.0 m zone and hit Flagsticky.",
       routineType: WorkoutRoutineType.GolfPractice,
@@ -1886,6 +2255,7 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
     {
       sourceSeedId: "golf_practice_chipping_7m_routine",
       pathSeedId: "golf",
+      markTemplateSeedId: golfRoutineMarkTemplateSeedId("golf_practice_chipping_7m_routine"),
       title: "Golf Practice Chipping 7 m",
       description: "Golf Craft chipping: 3 sets x 8 reps, land inside 2.8 m zone and hit Flagsticky.",
       routineType: WorkoutRoutineType.GolfPractice,
@@ -1899,6 +2269,7 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
     {
       sourceSeedId: "golf_practice_chipping_3_5_7m_routine",
       pathSeedId: "golf",
+      markTemplateSeedId: golfRoutineMarkTemplateSeedId("golf_practice_chipping_3_5_7m_routine"),
       title: "Golf Practice Chipping 3-5-7 m",
       description: "Golf Craft chipping test: 6 sets x 4 reps across 3 m, 5 m, and 7 m.",
       routineType: WorkoutRoutineType.GolfPractice,
@@ -1909,9 +2280,21 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
         ...buildGolfChippingTestExercises(),
       ],
     },
+    ...GOLF_PROGRAM_WEEKS.map((week) => ({
+      sourceSeedId: week.routineSeedId,
+      pathSeedId: "golf",
+      markTemplateSeedId: golfRoutineMarkTemplateSeedId(week.routineSeedId),
+      title: golfProgramRoutineTitle(week),
+      description: `Golf Craft program week ${week.weekNumber}: ${week.description}`,
+      routineType: WorkoutRoutineType.GolfPractice,
+      estimatedDurationMin: week.weekNumber === 1 ? 30 : 35,
+      isActive: true,
+      exercises: buildGolfProgramExercises(week),
+    })),
     {
       sourceSeedId: "golf_practice_swing_routine",
       pathSeedId: "golf",
+      markTemplateSeedId: golfRoutineMarkTemplateSeedId("golf_practice_swing_routine"),
       title: "Golf Practice Swing",
       description: "Log-only Golf Craft swing practice.",
       routineType: WorkoutRoutineType.GolfPractice,

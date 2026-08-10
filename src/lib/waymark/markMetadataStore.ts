@@ -58,3 +58,22 @@ export async function setMarkMetadata(
   await settings.setSetting(userId, key(metadata.markId), metadata);
   return metadata;
 }
+
+export function copyMarkExecutionPresentationMetadata(
+  source: MarkMetadata | null,
+  replacementMarkId: string,
+): MarkMetadata {
+  return {
+    markId: replacementMarkId,
+    sourceKind: source?.sourceKind,
+    appearsInToday: source?.appearsInToday,
+    appearsInPathProof: source?.appearsInPathProof,
+    appearsInJournal: source?.appearsInJournal,
+    countsAsPathProof: source?.countsAsPathProof,
+    orderIndex: source?.orderIndex,
+    blockType: source?.blockType,
+    taskKind: source?.taskKind,
+    requiresText: source?.requiresText,
+    milestoneSourceSeedId: source?.milestoneSourceSeedId,
+  };
+}

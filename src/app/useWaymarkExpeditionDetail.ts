@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { ExpeditionDetailItem, ExpeditionMilestoneItem } from "../components/expeditions/types";
+import { ExpeditionDetailItem, ExpeditionMilestoneItem, ExpeditionNoMilestoneGroupItem } from "../components/expeditions/types";
 import { MilestoneStatus } from "../domain/waymark/enums";
 import type { Locale } from "../types/ui";
 import { useWaymarkApp } from "./WaymarkAppProvider";
 import { repairWeeklyTimetableMilestoneLinksForExpedition } from "../lib/waymark";
-import { buildExpeditionDetailModel } from "./expeditionDetailModel";
+import { buildExpeditionDetailModel, groupExpeditionMarksByMilestone } from "./expeditionDetailModel";
 import { formatLocalDate, shiftLocalDate } from "./waymarkUi";
 
 type ExpeditionDetailState =
-  | { status: "idle" | "loading"; error: null; expedition: ExpeditionDetailItem | null; milestones: ExpeditionMilestoneItem[] }
-  | { status: "error"; error: Error; expedition: null; milestones: ExpeditionMilestoneItem[] }
-  | { status: "ready"; error: null; expedition: ExpeditionDetailItem | null; milestones: ExpeditionMilestoneItem[] };
+  | { status: "idle" | "loading"; error: null; expedition: ExpeditionDetailItem | null; milestones: ExpeditionMilestoneItem[]; unassignedMarks: ExpeditionNoMilestoneGroupItem | null }
+  | { status: "error"; error: Error; expedition: null; milestones: ExpeditionMilestoneItem[]; unassignedMarks: ExpeditionNoMilestoneGroupItem | null }
+  | { status: "ready"; error: null; expedition: ExpeditionDetailItem | null; milestones: ExpeditionMilestoneItem[]; unassignedMarks: ExpeditionNoMilestoneGroupItem | null };
 
 export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string | null) {
   const app = useWaymarkApp();
@@ -19,6 +19,7 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
     error: null,
     expedition: null,
     milestones: [],
+    unassignedMarks: null,
   });
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -26,18 +27,18 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
     let cancelled = false;
 
     if (!expeditionId) {
-      setState({ status: "idle", error: null, expedition: null, milestones: [] });
+      setState({ status: "idle", error: null, expedition: null, milestones: [], unassignedMarks: null });
       return;
     }
 
     void (async () => {
-      setState({ status: "loading", error: null, expedition: null, milestones: [] });
+      setState({ status: "loading", error: null, expedition: null, milestones: [], unassignedMarks: null });
 
       try {
         const expedition = await app.repositories.expeditions.getExpeditionById(expeditionId);
         if (!expedition) {
           if (!cancelled) {
-            setState({ status: "ready", error: null, expedition: null, milestones: [] });
+            setState({ status: "ready", error: null, expedition: null, milestones: [], unassignedMarks: null });
           }
           return;
         }
@@ -46,10 +47,9 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
 
         const path = await app.repositories.paths.getPathById(expedition.pathId);
         const milestones = await app.repositories.expeditions.listMilestonesByExpedition(expedition.id);
-        const milestoneMarks = await Promise.all(
-          milestones.map(async (milestone) => [milestone.id, await app.repositories.marks.listMarkInstancesByMilestone(milestone.id)] as const),
-        );
-        const detail = buildExpeditionDetailModel(expedition, path, milestones, new Map(milestoneMarks), locale);
+        const expeditionMarks = await app.repositories.marks.listMarkInstancesByExpedition(expedition.id);
+        const { marksByMilestoneId, unassignedMarks } = groupExpeditionMarksByMilestone(milestones, expeditionMarks);
+        const detail = buildExpeditionDetailModel(expedition, path, milestones, marksByMilestoneId, locale, unassignedMarks);
 
         if (!cancelled) {
           setState({
@@ -57,6 +57,7 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
             error: null,
             expedition: detail.expedition,
             milestones: detail.milestones,
+            unassignedMarks: detail.unassignedMarks,
           });
         }
       } catch (error) {
@@ -66,6 +67,7 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
             error: error instanceof Error ? error : new Error("Failed to load expedition detail."),
             expedition: null,
             milestones: [],
+            unassignedMarks: null,
           });
         }
       }
@@ -119,6 +121,7 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
   return {
     ...state,
     completeMilestone,
+    refresh,
     skipMilestone,
     rescheduleMilestone,
   };

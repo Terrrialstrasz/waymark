@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Keyboard, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { IconBadge } from "../primitives/IconBadge";
 import { NoteInputBase } from "../primitives/NoteInputBase";
 import { WaymarkIcon } from "../primitives/WaymarkIcon";
@@ -15,6 +15,8 @@ import {
 import { getBorderStyle } from "../../design-system/utils/get-border-style";
 import { Locale } from "../../types/ui";
 import {
+  ExpeditionOption,
+  MilestoneOption,
   PathOption,
   QuickSubstituteValue,
   SubstituteCandidateMark,
@@ -31,6 +33,8 @@ type Props = {
   quickMarkDetailLabel?: string;
   quickMarkDetailPlaceholder?: string;
   choosePathLabel: string;
+  chooseExpeditionLabel?: string;
+  chooseMilestoneLabel?: string;
   emptyExistingLabel: string;
   instructionLabel: string;
   orLabel: string;
@@ -38,6 +42,12 @@ type Props = {
   substituteLabel: string;
   existingCandidates: SubstituteCandidateMark[];
   pathOptions: PathOption[];
+  expeditionOptions?: ExpeditionOption[];
+  milestoneOptions?: MilestoneOption[];
+  maxAvailableHeight?: number;
+  initialPathId?: string;
+  initialExpeditionId?: string | null;
+  initialMilestoneId?: string | null;
   onCancel: () => void;
   onSubstituteWithExisting?: (substituteMarkId: string) => void;
   onSubstituteWithQuickMark?: (value: QuickSubstituteValue) => void;
@@ -54,6 +64,8 @@ export function PlannedMarkSubstituteDialog({
   quickMarkDetailLabel,
   quickMarkDetailPlaceholder,
   choosePathLabel,
+  chooseExpeditionLabel,
+  chooseMilestoneLabel,
   emptyExistingLabel,
   instructionLabel,
   orLabel,
@@ -61,6 +73,12 @@ export function PlannedMarkSubstituteDialog({
   substituteLabel,
   existingCandidates,
   pathOptions,
+  expeditionOptions = [],
+  milestoneOptions = [],
+  maxAvailableHeight,
+  initialPathId,
+  initialExpeditionId,
+  initialMilestoneId,
   onCancel,
   onSubstituteWithExisting,
   onSubstituteWithQuickMark,
@@ -69,18 +87,27 @@ export function PlannedMarkSubstituteDialog({
   const [selectedSubstituteMarkId, setSelectedSubstituteMarkId] = useState<string | null>(null);
   const [quickTitle, setQuickTitle] = useState("");
   const [quickDetail, setQuickDetail] = useState("");
-  const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
+  const [selectedPathId, setSelectedPathId] = useState<string | null>(initialPathId ?? null);
+  const [selectedExpeditionId, setSelectedExpeditionId] = useState<string | null>(initialExpeditionId ?? null);
+  const [selectedMilestoneId, setSelectedMilestoneId] = useState<string | null>(initialMilestoneId ?? null);
   const [showExistingList, setShowExistingList] = useState(false);
   const [showPathList, setShowPathList] = useState(false);
+  const [showExpeditionList, setShowExpeditionList] = useState(false);
+  const [showMilestoneList, setShowMilestoneList] = useState(false);
+  const bodyScrollRef = useRef<ScrollView | null>(null);
 
   useEffect(() => {
     setSelectedSubstituteMarkId(null);
     setQuickTitle("");
     setQuickDetail("");
-    setSelectedPathId(null);
+    setSelectedPathId(initialPathId ?? null);
+    setSelectedExpeditionId(initialExpeditionId ?? null);
+    setSelectedMilestoneId(initialMilestoneId ?? null);
     setShowExistingList(false);
     setShowPathList(false);
-  }, [title]);
+    setShowExpeditionList(false);
+    setShowMilestoneList(false);
+  }, [initialExpeditionId, initialMilestoneId, initialPathId, title]);
 
   const selectedCandidate = useMemo(
     () => existingCandidates.find((candidate) => candidate.id === selectedSubstituteMarkId) ?? null,
@@ -90,13 +117,52 @@ export function PlannedMarkSubstituteDialog({
     () => pathOptions.find((path) => path.id === selectedPathId) ?? null,
     [pathOptions, selectedPathId],
   );
-  const quickModeActive = quickTitle.trim().length > 0 || Boolean(selectedPathId);
+  const availableExpeditions = useMemo(
+    () => expeditionOptions.filter((expedition) => !selectedPathId || expedition.pathId === selectedPathId),
+    [expeditionOptions, selectedPathId],
+  );
+  const selectedExpedition = useMemo(
+    () => availableExpeditions.find((expedition) => expedition.id === selectedExpeditionId) ?? null,
+    [availableExpeditions, selectedExpeditionId],
+  );
+  const availableMilestones = useMemo(
+    () =>
+      milestoneOptions.filter(
+        (milestone) =>
+          (!selectedPathId || !milestone.pathId || milestone.pathId === selectedPathId) &&
+          Boolean(selectedExpeditionId) &&
+          milestone.expeditionId === selectedExpeditionId,
+      ),
+    [milestoneOptions, selectedExpeditionId, selectedPathId],
+  );
+  const selectedMilestone = useMemo(
+    () => availableMilestones.find((milestone) => milestone.id === selectedMilestoneId) ?? null,
+    [availableMilestones, selectedMilestoneId],
+  );
+  const quickModeActive = quickTitle.trim().length > 0 || quickDetail.trim().length > 0;
   const existingModeActive = Boolean(selectedSubstituteMarkId);
   const canSubmitExisting = Boolean(selectedSubstituteMarkId && onSubstituteWithExisting);
   const canSubmitQuick = Boolean(
     quickTitle.trim().length > 0 && selectedPathId && onSubstituteWithQuickMark,
   );
   const canSubmit = canSubmitExisting || canSubmitQuick;
+  const cardMaxHeight = maxAvailableHeight ? Math.min(560, maxAvailableHeight) : 560;
+  const cardMinHeight = maxAvailableHeight ? Math.min(440, Math.max(320, cardMaxHeight)) : 440;
+
+  function toggleDropdown(dropdown: "existing" | "path" | "expedition" | "milestone") {
+    Keyboard.dismiss();
+    setShowExistingList((current) => (dropdown === "existing" ? !current : false));
+    setShowPathList((current) => (dropdown === "path" ? !current : false));
+    setShowExpeditionList((current) => (dropdown === "expedition" ? !current : false));
+    setShowMilestoneList((current) => (dropdown === "milestone" ? !current : false));
+  }
+
+  function closeDropdowns() {
+    setShowExistingList(false);
+    setShowPathList(false);
+    setShowExpeditionList(false);
+    setShowMilestoneList(false);
+  }
 
   return (
     <View
@@ -105,6 +171,8 @@ export function PlannedMarkSubstituteDialog({
         {
           backgroundColor: foundationColors.bg.paper,
           borderColor: theme.border,
+          maxHeight: cardMaxHeight,
+          minHeight: cardMinHeight,
         },
       ]}
     >
@@ -125,8 +193,10 @@ export function PlannedMarkSubstituteDialog({
 
       <View style={styles.bodyWrap}>
         <ScrollView
+          ref={bodyScrollRef}
           bounces={false}
           contentContainerStyle={styles.body}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
@@ -137,7 +207,7 @@ export function PlannedMarkSubstituteDialog({
             <SelectField
               active={!quickModeActive}
               label={selectedCandidate ? selectedCandidate.title : selectExistingPlaceholder}
-              onPress={() => setShowExistingList((current) => !current)}
+              onPress={() => toggleDropdown("existing")}
               theme={theme}
             />
             {showExistingList ? (
@@ -151,7 +221,9 @@ export function PlannedMarkSubstituteDialog({
                         setQuickTitle("");
                         setQuickDetail("");
                         setSelectedPathId(null);
-                        setShowExistingList(false);
+                        setSelectedExpeditionId(null);
+                        setSelectedMilestoneId(null);
+                        closeDropdowns();
                       }}
                       style={[
                         styles.optionRow,
@@ -208,8 +280,10 @@ export function PlannedMarkSubstituteDialog({
                 setQuickTitle(value);
                 if (value.trim().length > 0) {
                   setSelectedSubstituteMarkId(null);
+                  closeDropdowns();
                 }
               }}
+              onFocus={() => bodyScrollRef.current?.scrollTo({ y: 210, animated: true })}
               placeholder={quickMarkPlaceholder}
               value={quickTitle}
               variant="singleLine"
@@ -221,8 +295,10 @@ export function PlannedMarkSubstituteDialog({
                 setQuickDetail(value);
                 if (value.trim().length > 0) {
                   setSelectedSubstituteMarkId(null);
+                  closeDropdowns();
                 }
               }}
+              onFocus={() => bodyScrollRef.current?.scrollTo({ y: 300, animated: true })}
               placeholder={quickMarkDetailPlaceholder ?? quickMarkPlaceholder}
               value={quickDetail}
             />
@@ -234,7 +310,7 @@ export function PlannedMarkSubstituteDialog({
                 if (!pathOptions.length) {
                   return;
                 }
-                setShowPathList((current) => !current);
+                toggleDropdown("path");
               }}
               theme={theme}
             />
@@ -245,8 +321,10 @@ export function PlannedMarkSubstituteDialog({
                     key={path.id}
                     onPress={() => {
                       setSelectedPathId(path.id);
+                      setSelectedExpeditionId(null);
+                      setSelectedMilestoneId(null);
                       setSelectedSubstituteMarkId(null);
-                      setShowPathList(false);
+                      closeDropdowns();
                     }}
                     style={[
                       styles.optionRow,
@@ -266,6 +344,94 @@ export function PlannedMarkSubstituteDialog({
                       <WaymarkIcon semanticName="status.done" size="xs" state="selected" />
                     ) : null}
                   </Pressable>
+                ))}
+              </View>
+            ) : null}
+            <SelectField
+              active={!existingModeActive && Boolean(selectedPathId)}
+              disabled={!selectedPathId}
+              label={
+                selectedExpedition
+                  ? selectedExpedition.label
+                  : chooseExpeditionLabel ?? (locale === "vi" ? "Chon expedition" : "Choose expedition")
+              }
+              onPress={() => {
+                if (!selectedPathId) {
+                  return;
+                }
+                toggleDropdown("expedition");
+              }}
+              theme={theme}
+            />
+            {showExpeditionList && selectedPathId ? (
+              <View style={styles.optionList}>
+                <OptionRow
+                  active={!selectedExpeditionId}
+                  label={locale === "vi" ? "Khong gan expedition" : "No expedition"}
+                  onPress={() => {
+                    setSelectedExpeditionId(null);
+                    setSelectedMilestoneId(null);
+                    setSelectedSubstituteMarkId(null);
+                    closeDropdowns();
+                  }}
+                  theme={theme}
+                />
+                {availableExpeditions.map((expedition) => (
+                  <OptionRow
+                    active={expedition.id === selectedExpeditionId}
+                    key={expedition.id}
+                    label={expedition.label}
+                    onPress={() => {
+                      setSelectedExpeditionId(expedition.id);
+                      setSelectedMilestoneId(null);
+                      setSelectedSubstituteMarkId(null);
+                      closeDropdowns();
+                    }}
+                    theme={theme}
+                  />
+                ))}
+              </View>
+            ) : null}
+            <SelectField
+              active={!existingModeActive && Boolean(selectedExpeditionId)}
+              disabled={!selectedExpeditionId}
+              label={
+                selectedMilestone
+                  ? selectedMilestone.label
+                  : chooseMilestoneLabel ?? (locale === "vi" ? "Chon milestone" : "Choose milestone")
+              }
+              onPress={() => {
+                if (!selectedExpeditionId) {
+                  return;
+                }
+                toggleDropdown("milestone");
+              }}
+              theme={theme}
+            />
+            {showMilestoneList && selectedExpeditionId ? (
+              <View style={styles.optionList}>
+                <OptionRow
+                  active={!selectedMilestoneId}
+                  label={locale === "vi" ? "Khong gan milestone" : "No milestone"}
+                  onPress={() => {
+                    setSelectedMilestoneId(null);
+                    setSelectedSubstituteMarkId(null);
+                    closeDropdowns();
+                  }}
+                  theme={theme}
+                />
+                {availableMilestones.map((milestone) => (
+                  <OptionRow
+                    active={milestone.id === selectedMilestoneId}
+                    key={milestone.id}
+                    label={milestone.label}
+                    onPress={() => {
+                      setSelectedMilestoneId(milestone.id);
+                      setSelectedSubstituteMarkId(null);
+                      closeDropdowns();
+                    }}
+                    theme={theme}
+                  />
                 ))}
               </View>
             ) : null}
@@ -303,6 +469,8 @@ export function PlannedMarkSubstituteDialog({
                 title: quickTitle.trim(),
                 detail: quickDetail.trim() || undefined,
                 pathId: selectedPathId,
+                expeditionId: selectedExpeditionId,
+                milestoneId: selectedMilestoneId,
               });
             }
           }}
@@ -311,6 +479,38 @@ export function PlannedMarkSubstituteDialog({
         />
       </View>
     </View>
+  );
+}
+
+function OptionRow({
+  active,
+  label,
+  onPress,
+  theme,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+  theme: PlannedMarkPathTheme;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.optionRow,
+        {
+          borderColor: active ? theme.accent : theme.border,
+          backgroundColor: active ? theme.surfaceSoft : foundationColors.bg.paper,
+        },
+      ]}
+    >
+      <View style={styles.optionCopy}>
+        <WMText numberOfLines={1} variant="bodyStrong">
+          {label}
+        </WMText>
+      </View>
+      {active ? <WaymarkIcon semanticName="status.done" size="xs" state="selected" /> : null}
+    </Pressable>
   );
 }
 

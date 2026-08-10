@@ -64,6 +64,7 @@ export type WaymarkVaultBootGateResult = {
 };
 
 const DEFAULT_VAULT_NAME = "Waymark Vault";
+const DEFAULT_TURSO_VAULT_ID = "vault_mqfvyeyy_g86zwdmw";
 const METADATA_ROW_LIMIT = 1;
 
 const USER_DATA_TABLES = [
@@ -98,8 +99,30 @@ export async function runWaymarkVaultBootGateAsync(
   const schemaVersion = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
   const clientType = options.clientType ?? getConfiguredClientType();
   const cloudRestoreConfigured = options.cloudRestoreConfigured ?? isCloudRestoreConfigured();
+  const configuredVaultId = getConfiguredVaultId();
+  const configuredDeviceId = getConfiguredDeviceId();
 
   if (existing) {
+    const vaultId = configuredVaultId;
+    if (existing.vaultId !== vaultId) {
+      await ensureVaultAndDeviceRowsAsync(db, {
+        vaultId,
+        deviceId: existing.deviceId,
+        clientType,
+        deviceName: options.deviceName ?? clientType,
+        now,
+      });
+      await rehomeExistingMetadataAsync(db, existing, {
+        vaultId,
+        now,
+      });
+      await upsertSyncStateAsync(db, {
+        vaultId,
+        deviceId: existing.deviceId,
+        protectionStatus: cloudRestoreConfigured ? "cloud_configured" : "local_only",
+        syncMode: cloudRestoreConfigured ? "eod" : "none",
+      });
+    }
     await touchExistingMetadataAsync(db, existing, {
       clientType,
       schemaVersion,
@@ -118,8 +141,8 @@ export async function runWaymarkVaultBootGateAsync(
   }
 
   const hasExistingUserData = await hasAnyUserDataAsync(db);
-  const vaultId = getConfiguredVaultId() ?? generateStableLocalId("vault", now);
-  const deviceId = getConfiguredDeviceId() ?? generateStableLocalId("device", now);
+  const vaultId = configuredVaultId;
+  const deviceId = configuredDeviceId ?? generateStableLocalId("device", now);
   const dbInstanceId = generateStableLocalId("db", now);
   const restoreAttempted = !hasExistingUserData && cloudRestoreConfigured;
   let restoreCompleted = false;
@@ -247,6 +270,24 @@ async function touchExistingMetadataAsync(
   await db.runAsync("UPDATE devices SET last_seen_at = ? WHERE id = ?;", input.now, current.deviceId);
 }
 
+async function rehomeExistingMetadataAsync(
+  db: SQLiteDatabase,
+  current: AppDbMetadata,
+  input: {
+    vaultId: string;
+    now: number;
+  },
+): Promise<void> {
+  await db.runAsync(
+    `UPDATE app_db_metadata
+     SET vault_id = ?, last_migration_at = ?
+     WHERE db_instance_id = ?;`,
+    input.vaultId,
+    input.now,
+    current.dbInstanceId,
+  );
+}
+
 async function hasAnyUserDataAsync(db: SQLiteDatabase): Promise<boolean> {
   for (const tableName of USER_DATA_TABLES) {
     const row = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM ${tableName};`);
@@ -342,8 +383,8 @@ function getConfiguredClientType(): WaymarkClientType {
   return getEnvValue("WAYMARK_CLIENT_TYPE") === "lite" ? "lite" : "main";
 }
 
-function getConfiguredVaultId(): string | null {
-  return getEnvValue("WAYMARK_VAULT_ID");
+function getConfiguredVaultId(): string {
+  return getEnvValue("WAYMARK_VAULT_ID") ?? DEFAULT_TURSO_VAULT_ID;
 }
 
 function getConfiguredDeviceId(): string | null {

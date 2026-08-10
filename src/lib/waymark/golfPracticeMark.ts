@@ -1,4 +1,5 @@
 import type { GolfShortGameSetPlan, GolfWorkoutType } from "../../types/golfPractice";
+import { findGolfProgramWeekByTitle } from "../../config/golfProgramCatalog";
 
 const CHIPPING_SET_LABELS = ["Calibration", "Giữ nhịp", "Pressure"] as const;
 const CHIPPING_LANDING_ZONES: Record<string, string> = {
@@ -80,6 +81,10 @@ export function buildGolfShortGamePracticePlanForMarkTitle(title: string): GolfS
 
 export function resolveGolfPracticeWorkoutTypeForMarkTitle(title: string): GolfWorkoutType | null {
   const normalized = title.trim().toLowerCase();
+
+  if (findGolfProgramWeekByTitle(title)) {
+    return "swing";
+  }
 
   if (
     normalized.includes("short game") ||

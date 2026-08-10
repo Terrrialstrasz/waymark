@@ -81,7 +81,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
     allowOverlap,
   };
 }
@@ -222,6 +222,7 @@ export async function importWeeklyTimetable20260629To0705(
     weekEndDate: "2026-07-05",
     note: "Imported from approved weekly timetable 2026-06-29 to 2026-07-05. Planned/Routine/Micro/Lunar marks use schedule only; due dates live only on the two Expeditions and two Milestones.",
     importBatchId: "weekly_timetable_2026_06_29_2026_07_05_approved_no_mark_due_dates",
+    allowTitleRefs: true,
     items: buildWeeklyTimetable20260629To0705(catalog),
     setMarkDueAt: false,
   });
@@ -252,6 +253,7 @@ export async function importWeeklyTimetable202607020305Patch(
     weekEndDate: "2026-07-05",
     note: "Patched only 2026-07-02, 2026-07-03, and 2026-07-05 weekly timetable marks.",
     importBatchId: "weekly_timetable_2026_07_02_03_05_patch_only",
+    allowTitleRefs: true,
     items,
     setMarkDueAt: false,
   });
@@ -330,7 +332,7 @@ async function repairPatchMaterializedMarks(repos: WaymarkRepositories, report: 
 
     await repos.marks.updateMarkInstance(mark.id, {
       title: item.title,
-      description: item.description ?? item.note ?? null,
+      description: item.description ?? null,
       pathId: item.pathId,
       templateId: item.templateId ?? null,
       expeditionId: item.expeditionId ?? null,

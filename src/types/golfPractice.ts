@@ -4,6 +4,7 @@ export type GolfClub =
   | "snag_launcher"
   | "snag_roller"
   | "snag_snapper"
+  | "sand_wedge"
   | "pitching_wedge"
   | "iron_9"
   | "iron_8"
@@ -43,8 +44,13 @@ export type GolfShortGameSetInput = GolfShortGameSetPlan & {
 
 export type GolfSwingSetInput = {
   setNumber: number;
+  setRole?: "revision" | "practice";
+  programWeek?: number;
+  sourceWeek?: number;
+  skillTitle?: string;
   reps: number;
   club: GolfClub;
+  clubs?: GolfClub[];
   shotType: GolfShotType;
   practiceMode: GolfPracticeMode;
   distancesYards?: number[];
@@ -55,6 +61,7 @@ export type GolfSwingSetInput = {
 
 export type SaveGolfPracticeLogInput = {
   markInstanceId?: string;
+  routineTemplateId?: string;
   workoutType: GolfWorkoutType;
   warmupCompleted: boolean;
   puttingSets?: GolfPuttingSetInput[];

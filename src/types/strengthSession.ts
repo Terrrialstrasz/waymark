@@ -7,7 +7,7 @@ export type SetState = "done" | "active" | "next" | "upcoming" | "failed" | "ski
 export type StretchState = "done" | "active" | "next" | "upcoming";
 export type TimerState = "idle" | "running" | "paused" | "warning" | "completed";
 export type WeightUnit = "kg" | "lb";
-export type WorkoutDayType = "day_a" | "day_b" | "walk";
+export type WorkoutDayType = "day_a" | "day_b" | "walk" | "bodyweight_rep_progress";
 export type ExerciseTargetMetric = "reps" | "duration" | "distance_m" | "steps";
 
 export type LocalizedText = Record<Locale, string>;

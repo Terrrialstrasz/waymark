@@ -26,6 +26,11 @@ import { resolveAnchorPathIdForDate } from "./anchorPathRuleStore";
 import { listCloseTrailRuleConfigs } from "./closeTrailConfigStore";
 import { createDisciplineProof, listDisciplineProofsByTrailDay, saveDisciplineProof } from "./disciplineProofStore";
 import { getMarkMetadata, MarkMetadata, setMarkMetadata } from "./markMetadataStore";
+import { createDailyPlanEngine, type EffectiveDailyPlan } from "./dailyPlanEngine";
+import { getDailyReplanState } from "./dailyReplanStateStore";
+import {
+  projectConfirmedDailyPlan,
+} from "./confirmedDailyPlanProjection";
 
 const CLOSE_TRAIL_HOUR = 21;
 const CLOSE_TRAIL_MINUTE = 30;
@@ -233,6 +238,54 @@ function buildCloseTrailSummaryCounts(marksWithMetadata: MarkWithMetadata[]): Cl
   };
 }
 
+function buildEffectiveCloseTrailSummaryCounts(
+  plan: EffectiveDailyPlan,
+  allTrailDayMarks: MarkWithMetadata[],
+): CloseTrailSummaryCounts {
+  if (plan.state?.status !== "confirmed") {
+    const effective = plan.effectiveMarks;
+    const chainMarks = plan.lineages.flatMap((lineage) => lineage.chain);
+    return {
+      plannedCount: effective.length,
+      completedCount: effective.filter(
+        (mark) => mark.status === MarkInstanceStatus.Completed || mark.status === MarkInstanceStatus.PartiallyCompleted,
+      ).length,
+      partiallyCompletedCount: effective.filter((mark) => mark.status === MarkInstanceStatus.PartiallyCompleted).length,
+      skippedCount: chainMarks.filter((mark) => mark.status === MarkInstanceStatus.Skipped).length,
+      rescheduledCount: chainMarks.filter((mark) => mark.status === MarkInstanceStatus.Rescheduled).length,
+      substitutedCount: chainMarks.filter((mark) => mark.status === MarkInstanceStatus.Substituted).length,
+      expiredCount: effective.filter((mark) => mark.status === MarkInstanceStatus.Expired).length,
+      cancelledCount: chainMarks.filter((mark) => mark.status === MarkInstanceStatus.Cancelled).length,
+      unresolvedCount: effective.filter((mark) => UNRESOLVED_MARK_STATUSES.has(mark.status)).length,
+      quickMarkCount: allTrailDayMarks.filter(({ mark }) => mark.origin === MarkInstanceOrigin.QuickCapture).length,
+    };
+  }
+
+  const projection = projectConfirmedDailyPlan(plan);
+  return {
+    plannedCount: projection.confirmedPlannedCount,
+    completedCount: projection.completedCount,
+    partiallyCompletedCount: projection.partiallyCompletedCount,
+    skippedCount: projection.skippedAfterConfirmCount,
+    rescheduledCount: projection.movedAfterConfirmCount,
+    substitutedCount: projection.substitutedAfterConfirmCount,
+    expiredCount: projection.expiredCount,
+    cancelledCount: projection.cancelledCount,
+    unresolvedCount: projection.unresolvedCount,
+    quickMarkCount: allTrailDayMarks.filter(({ mark }) => mark.origin === MarkInstanceOrigin.QuickCapture).length,
+  };
+}
+
+function committedPlanActivityCount(state: Awaited<ReturnType<typeof getDailyReplanState>>) {
+  if (!state) {
+    return 0;
+  }
+  if (state.status === "confirmed" && state.schemaVersion === 2) {
+    return state.confirmedPlanEntries.length;
+  }
+  return state.candidateRootMarkIds.length;
+}
+
 function shiftLocalDate(localDate: string, days: number) {
   const date = new Date(`${localDate}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
@@ -352,6 +405,15 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
       throw new CloseTrailEngineNotFoundError(trailDayId);
     }
 
+    if (!(await this.isDailyReplanConfirmed(this.repositories, trailDay))) {
+      return {
+        status: trailDay.status,
+        canClose: false,
+        reasonCode: "daily_replan_not_confirmed",
+        reasonMessage: "Confirm today's plan before closing the TrailDay.",
+      };
+    }
+
     const summary = await this.getCloseTrailSummary(trailDayId);
     const now = nowIso(asOf);
     if (trailDay.status === TrailDayStatus.Closed) {
@@ -373,7 +435,9 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
     }
 
     const thresholdPassed = isAfterCloseThreshold(now, trailDay.date);
-    const hasNonCancelledMarks = summary.plannedCount > 0;
+    const replanState = await getDailyReplanState(this.repositories.appSettings, trailDay.userId, trailDay.date);
+    const hasCommittedPlanActivity = committedPlanActivityCount(replanState) > 0;
+    const hasNonCancelledMarks = summary.plannedCount > 0 || hasCommittedPlanActivity;
     const hasMemoriesOrQuickMarks = summary.memoryCount > 0 || summary.quickMarkCount > 0;
     const hasUnresolvedMarks = summary.unresolvedCount > 0;
 
@@ -440,14 +504,16 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
     const memories = await this.repositories.memories.listMemoriesByTrailDay(trailDayId);
     const packChecks = await this.repositories.packChecks.listInstancesByTrailDay(trailDayId);
     const signals = await this.repositories.signals.listSignalsByTarget(SignalTargetType.TrailDay, trailDayId);
-    const counts = buildCloseTrailSummaryCounts(
-      await Promise.all(
-        marks.map(async (mark) => ({
-          mark,
-          metadata: await getMarkMetadata(this.repositories.appSettings, trailDay.userId, mark.id),
-        })),
-      ),
+    const marksWithMetadata = await Promise.all(
+      marks.map(async (mark) => ({
+        mark,
+        metadata: await getMarkMetadata(this.repositories.appSettings, trailDay.userId, mark.id),
+      })),
     );
+    const effectivePlan = await this.getDailyReplanPlanForClose(this.repositories, trailDay);
+    const counts = effectivePlan
+      ? buildEffectiveCloseTrailSummaryCounts(effectivePlan, marksWithMetadata)
+      : buildCloseTrailSummaryCounts(marksWithMetadata);
 
     const signalMissedCount = signals.filter(
       (signal) => signal.status === SignalStatus.Expired || signal.status === SignalStatus.Missed,
@@ -526,6 +592,9 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
 
     if (existingTrailDay.status === TrailDayStatus.Closed) {
       throw new CloseTrailEngineValidationError("TrailDay is already closed.");
+    }
+    if (!(await this.isDailyReplanConfirmed(this.repositories, existingTrailDay))) {
+      throw new CloseTrailEngineValidationError("Daily Replan must be confirmed before Close Trail.");
     }
 
     const readiness = await this.evaluateCloseReadiness(input.trailDayId, resolvedAt);
@@ -622,7 +691,24 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
     repos: WaymarkRepositories,
     trailDayId: string,
   ): Promise<CloseTrailMarkReview> {
-    const marks = await repos.marks.listMarkInstancesByTrailDay(trailDayId);
+    const trailDay = await repos.trailDays.getTrailDayById(trailDayId);
+    if (!trailDay) {
+      throw new CloseTrailEngineNotFoundError(trailDayId);
+    }
+    const effectivePlan = await this.getDailyReplanPlanForClose(repos, trailDay);
+    if (effectivePlan?.state?.status === "confirmed") {
+      const projection = projectConfirmedDailyPlan(effectivePlan);
+      return {
+        unresolved: projection.entries
+          .filter((entry) => entry.unresolved)
+          .map((entry) => entry.outcomeMark),
+        resolved: projection.entries
+          .filter((entry) => !entry.unresolved && !entry.cancelled)
+          .map((entry) => entry.outcomeMark),
+      };
+    }
+
+    const marks = effectivePlan?.effectiveMarks ?? await repos.marks.listMarkInstancesByTrailDay(trailDayId);
     const unresolved: typeof marks = [];
     const resolved: typeof marks = [];
 
@@ -766,14 +852,16 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
     const memories = await repos.memories.listMemoriesByTrailDay(trailDayId);
     const packChecks = await repos.packChecks.listInstancesByTrailDay(trailDayId);
     const signals = await repos.signals.listSignalsByTarget(SignalTargetType.TrailDay, trailDayId);
-    const counts = buildCloseTrailSummaryCounts(
-      await Promise.all(
-        marks.map(async (mark) => ({
-          mark,
-          metadata: await getMarkMetadata(repos.appSettings, trailDay.userId, mark.id),
-        })),
-      ),
+    const marksWithMetadata = await Promise.all(
+      marks.map(async (mark) => ({
+        mark,
+        metadata: await getMarkMetadata(repos.appSettings, trailDay.userId, mark.id),
+      })),
     );
+    const effectivePlan = await this.getDailyReplanPlanForClose(repos, trailDay);
+    const counts = effectivePlan
+      ? buildEffectiveCloseTrailSummaryCounts(effectivePlan, marksWithMetadata)
+      : buildCloseTrailSummaryCounts(marksWithMetadata);
 
     return {
       trailDayId,
@@ -820,6 +908,10 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
         metadata: await getMarkMetadata(repos.appSettings, trailDay.userId, mark.id),
       })),
     );
+    const effectivePlan = await this.getDailyReplanPlanForClose(repos, trailDay);
+    const confirmedProjection =
+      effectivePlan?.state?.status === "confirmed" ? projectConfirmedDailyPlan(effectivePlan) : null;
+    const metadataByMarkId = new Map(marksWithMetadata.map((entry) => [entry.mark.id, entry.metadata] as const));
     const activePaths = await repos.paths.listActivePaths(trailDay.userId);
     const pathTitleById = new Map(activePaths.map((path) => [path.id, path.title] as const));
     const relatedMarkIds = new Set<string>();
@@ -829,6 +921,14 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
       }
       if (mark.rescheduledToMarkId) {
         relatedMarkIds.add(mark.rescheduledToMarkId);
+      }
+    }
+    for (const entry of confirmedProjection?.entries ?? []) {
+      if (entry.substitutedMark?.substitutedByMarkId) {
+        relatedMarkIds.add(entry.substitutedMark.substitutedByMarkId);
+      }
+      if (entry.movedMark?.rescheduledToMarkId) {
+        relatedMarkIds.add(entry.movedMark.rescheduledToMarkId);
       }
     }
     const relatedMarks = await Promise.all(
@@ -863,9 +963,52 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
         .map((entry) => entry),
     );
-    const repairEntries = marksWithMetadata.filter(
-      ({ mark }) => mark.origin !== MarkInstanceOrigin.QuickCapture && NEEDS_REPAIR_MARK_STATUSES.has(mark.status),
-    );
+    const repairEntries =
+      confirmedProjection ?
+        confirmedProjection.entries
+          .filter((entry) => entry.unresolved || entry.expired)
+          .map((entry) => ({
+            mark: entry.outcomeMark,
+            metadata: metadataByMarkId.get(entry.outcomeMark.id) ?? null,
+          }))
+      : marksWithMetadata.filter(
+          ({ mark }) => mark.origin !== MarkInstanceOrigin.QuickCapture && NEEDS_REPAIR_MARK_STATUSES.has(mark.status),
+        );
+    const substitutedEntries =
+      confirmedProjection ?
+        confirmedProjection.entries
+          .filter((entry) => entry.substitutedMark)
+          .map((entry) => ({
+            mark: entry.substitutedMark!,
+            metadata: metadataByMarkId.get(entry.substitutedMark!.id) ?? null,
+          }))
+      : marksWithMetadata.filter(
+          ({ mark }) =>
+            mark.origin !== MarkInstanceOrigin.QuickCapture && mark.status === MarkInstanceStatus.Substituted,
+        );
+    const skippedEntries =
+      confirmedProjection ?
+        confirmedProjection.entries
+          .filter((entry) => entry.skippedMark)
+          .map((entry) => ({
+            mark: entry.skippedMark!,
+            metadata: metadataByMarkId.get(entry.skippedMark!.id) ?? null,
+          }))
+      : marksWithMetadata.filter(
+          ({ mark }) => mark.origin !== MarkInstanceOrigin.QuickCapture && mark.status === MarkInstanceStatus.Skipped,
+        );
+    const movedEntries =
+      confirmedProjection ?
+        confirmedProjection.entries
+          .filter((entry) => entry.movedMark)
+          .map((entry) => ({
+            mark: entry.movedMark!,
+            metadata: metadataByMarkId.get(entry.movedMark!.id) ?? null,
+          }))
+      : marksWithMetadata.filter(
+          ({ mark }) =>
+            mark.origin !== MarkInstanceOrigin.QuickCapture && mark.status === MarkInstanceStatus.Rescheduled,
+        );
     const outcomeCounts = {
       completed: summary.completedCount,
       partiallyCompleted: summary.partiallyCompletedCount,
@@ -910,11 +1053,7 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
       plannedMarkOutcomes: {
         sentence: plannedMarkOutcomeSentence,
         counts: outcomeCounts,
-        substituted: marksWithMetadata
-          .filter(
-            ({ mark }) =>
-              mark.origin !== MarkInstanceOrigin.QuickCapture && mark.status === MarkInstanceStatus.Substituted,
-          )
+        substituted: substitutedEntries
           .map(({ mark }) => {
             const substitute = mark.substitutedByMarkId ? relatedMarkById.get(mark.substitutedByMarkId) : undefined;
             return {
@@ -925,18 +1064,13 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
               resultLabel: substitute ? formatMarkStatusLabel(substitute.mark.status) : undefined,
             };
           }),
-        skipped: marksWithMetadata
-          .filter(({ mark }) => mark.origin !== MarkInstanceOrigin.QuickCapture && mark.status === MarkInstanceStatus.Skipped)
+        skipped: skippedEntries
           .map(({ mark, metadata }) => ({
             markId: mark.id,
             title: mark.title,
             reason: metadata?.resolutionReason,
           })),
-        moved: marksWithMetadata
-          .filter(
-            ({ mark }) =>
-              mark.origin !== MarkInstanceOrigin.QuickCapture && mark.status === MarkInstanceStatus.Rescheduled,
-          )
+        moved: movedEntries
           .map(({ mark, metadata }) => {
             const destination = mark.rescheduledToMarkId ? relatedMarkById.get(mark.rescheduledToMarkId) : undefined;
             const destinationTrailDay =
@@ -1061,6 +1195,29 @@ export class DefaultCloseTrailEngine implements CloseTrailEngine {
       characterEffect: "kept",
       countsAsPathProof: true,
     });
+  }
+
+  private async getDailyReplanPlanForClose(
+    repos: WaymarkRepositories,
+    trailDay: TrailDay,
+  ): Promise<EffectiveDailyPlan | null> {
+    const engine = createDailyPlanEngine(repos);
+    if ((await engine.getCloseCompatibility(trailDay.userId, trailDay.date)) === "legacy") {
+      return null;
+    }
+    const state = await getDailyReplanState(repos.appSettings, trailDay.userId, trailDay.date);
+    if (!state) {
+      throw new CloseTrailEngineValidationError(`Daily Replan state is missing for ${trailDay.date}.`);
+    }
+    return engine.resolveEffectiveDailyPlan(trailDay.userId, trailDay.date);
+  }
+
+  private async isDailyReplanConfirmed(repos: WaymarkRepositories, trailDay: TrailDay): Promise<boolean> {
+    const engine = createDailyPlanEngine(repos);
+    if ((await engine.getCloseCompatibility(trailDay.userId, trailDay.date)) === "legacy") {
+      return true;
+    }
+    return (await getDailyReplanState(repos.appSettings, trailDay.userId, trailDay.date))?.status === "confirmed";
   }
 }
 

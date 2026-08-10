@@ -9,6 +9,7 @@ import {
   Expedition,
   MarkDependency,
   MarkInstance,
+  MarkInstanceDetail,
   MarkPackCheckRule,
   MarkTemplate,
   MediaAsset,
@@ -125,6 +126,7 @@ export type CreateMarkInstanceInput = {
 };
 
 export type UpdateMarkInstancePatch = {
+  trailDayId?: EntityId;
   pathId?: EntityId;
   templateId?: EntityId | null;
   expeditionId?: EntityId | null;
@@ -146,6 +148,13 @@ export type UpdateMarkInstancePatch = {
   sourceBacklogItemId?: EntityId | null;
   generationKey?: string | null;
   proofMediaAssetIds?: EntityId[];
+};
+
+export type UpsertMarkInstanceDetailPatch = {
+  primerSnapshot?: string | null;
+  preActionComment?: string | null;
+  postActionFeedback?: string | null;
+  userEditedAt?: ISODateTimeString | null;
 };
 
 export type CreateUserProfileInput = {
@@ -199,6 +208,7 @@ export type CreateMilestoneInput = {
   title: string;
   description?: string | null;
   status: Milestone["status"];
+  startDate?: LocalDateString | null;
   targetDate?: LocalDateString | null;
   sortOrder: number;
   orderIndex: number;
@@ -209,6 +219,7 @@ export type UpdateMilestonePatch = {
   title?: string;
   description?: string | null;
   status?: Milestone["status"];
+  startDate?: LocalDateString | null;
   targetDate?: LocalDateString | null;
   sortOrder?: number;
   orderIndex?: number;
@@ -413,6 +424,7 @@ export interface ExpeditionRepository {
   listMilestonesByExpedition(expeditionId: EntityId): Promise<Milestone[]>;
   createMilestone(input: CreateMilestoneInput): Promise<Milestone>;
   updateMilestone(milestoneId: EntityId, patch: UpdateMilestonePatch): Promise<Milestone>;
+  softDeleteMilestone(milestoneId: EntityId): Promise<void>;
 }
 
 export interface MarkRepository {
@@ -423,6 +435,9 @@ export interface MarkRepository {
   createMarkInstance(input: CreateMarkInstanceInput): Promise<MarkInstance>;
   updateMarkInstance(markInstanceId: EntityId, patch: UpdateMarkInstancePatch): Promise<MarkInstance>;
   getMarkInstanceById(markInstanceId: EntityId): Promise<MarkInstance | null>;
+  getMarkInstanceDetail(markInstanceId: EntityId): Promise<MarkInstanceDetail | null>;
+  upsertMarkInstanceDetail(markInstanceId: EntityId, patch: UpsertMarkInstanceDetailPatch): Promise<MarkInstanceDetail>;
+  listPredecessorMarkInstances(markInstanceId: EntityId): Promise<MarkInstance[]>;
   listMarkInstancesByTrailDay(trailDayId: EntityId): Promise<MarkInstance[]>;
   listMarkInstancesByDate(userId: EntityId, localDate: LocalDateString): Promise<MarkInstance[]>;
   listMarkInstancesByExpedition(expeditionId: EntityId): Promise<MarkInstance[]>;
@@ -478,6 +493,7 @@ export interface BacklogRepository {
 export interface WeekPlanRepository {
   getById(id: EntityId): Promise<WeekPlan | null>;
   getItemById(id: EntityId): Promise<WeekPlanItem | null>;
+  findActiveItemByCreatedMarkInstanceId(markInstanceId: EntityId): Promise<WeekPlanItem | null>;
   getByWeekStart(userId: EntityId, weekStartDate: string): Promise<WeekPlan | null>;
   listItems(weekPlanId: EntityId): Promise<WeekPlanItem[]>;
   listItemsByExpedition(userId: EntityId, expeditionId: EntityId): Promise<WeekPlanItem[]>;

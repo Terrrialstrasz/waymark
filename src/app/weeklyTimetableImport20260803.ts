@@ -111,7 +111,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
     allowOverlap,
     templateRef,
   };
@@ -242,6 +242,7 @@ export async function importWeeklyTimetable20260803To0809(
     weekEndDate: "2026-08-09",
     note: "Imported from approved weekly plan 2026-08-03 to 2026-08-09. Keeps every Focus Block at 90 minutes, splits each n8n block into a separate mark, and uses canonical Workout/Golf titles for direct session routing.",
     importBatchId: "weekly_timetable_2026_08_03_2026_08_09_v1",
+    allowTitleRefs: true,
     items,
     setMarkDueAt: false,
   });

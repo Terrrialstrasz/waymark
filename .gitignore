@@ -37,6 +37,9 @@ yarn-error.*
 /tmp-*.png
 /tmp-*.webp
 
+# generated Waymark/Turso workspace snapshots
+/ai-resources/Waymark DB sources/generated/
+
 # macOS
 .DS_Store
 *.pem

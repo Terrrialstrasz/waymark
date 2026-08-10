@@ -26,7 +26,19 @@ export type ExpeditionFilterPathOption = {
 
 export type ExpeditionDetailStatus = Extract<ExpeditionState, "active" | "upcoming" | "done" | "archived">;
 export type MilestoneStatus = "done" | "inProgress" | "upcoming" | "skipped";
-export type PlannedMarkDetailStatus = "planned" | "upcoming" | "done" | "missed" | "needsRepair";
+export type PlannedMarkDetailStatus =
+  | "planned"
+  | "ready"
+  | "blocked"
+  | "active"
+  | "completed"
+  | "partially_completed"
+  | "skipped"
+  | "rescheduled"
+  | "substituted"
+  | "expired"
+  | "cancelled"
+  | "needsRepair";
 
 export type ExpeditionDetailItem = {
   id: string;
@@ -57,7 +69,17 @@ export type ExpeditionMilestoneItem = {
   title: string;
   startDate?: string | Date;
   endDate?: string | Date;
+  completedAt?: string | Date;
   status: MilestoneStatus;
+  completedMarks: number;
+  totalMarks: number;
+  plannedMarks: ExpeditionPlannedMarkItem[];
+  isExpanded?: boolean;
+};
+
+export type ExpeditionNoMilestoneGroupItem = {
+  id: string;
+  title: string;
   completedMarks: number;
   totalMarks: number;
   plannedMarks: ExpeditionPlannedMarkItem[];
@@ -78,6 +100,7 @@ export type ExpeditionPlannedMarkItem = {
   pathId?: PathId;
   pathName: string;
   timingLabel?: string;
+  sortTime?: string;
   icon?: WaymarkSemanticIconName;
   heroImage?: string;
   pathHeroImage?: string;

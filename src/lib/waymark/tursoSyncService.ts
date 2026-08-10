@@ -1,4 +1,5 @@
 import type { SQLiteQueryable } from "../../db/adapters/SQLiteRepositoryBase";
+import { canUploadWaymarkActivityEntity, getWaymarkTursoOwnershipForEntity } from "./tursoDataOwnership";
 import {
   assertAllowedSyncOutboxDrainTrigger,
   listPendingSyncOutboxRows,
@@ -43,11 +44,20 @@ export type WaymarkTursoUploadFailure = {
   error: string;
 };
 
+export type WaymarkTursoSkippedUploadRow = {
+  outboxId: string;
+  entityType: string;
+  entityId: string;
+  idempotencyKey: string;
+  reason: string;
+};
+
 export type WaymarkTursoUploadResult = {
   trigger: SyncOutboxDrainTrigger;
   attempted: number;
   uploaded: WaymarkTursoUploadedRow[];
   failed: WaymarkTursoUploadFailure[];
+  skipped: WaymarkTursoSkippedUploadRow[];
   stoppedAfterTransientFailure: boolean;
 };
 
@@ -66,10 +76,31 @@ export async function uploadWaymarkOutboxToTurso(input: WaymarkTursoUploadInput)
     attempted: 0,
     uploaded: [],
     failed: [],
+    skipped: [],
     stoppedAfterTransientFailure: false,
   };
 
   for (const row of rows) {
+    if (!canUploadWaymarkActivityEntity(row.entity_type)) {
+      const ownership = getWaymarkTursoOwnershipForEntity(row.entity_type);
+      const reason = ownership
+        ? `Skipped ${ownership.mode} entity during Waymark activity upload. ${ownership.notes}`
+        : "Skipped entity type that is not part of Waymark activity upload.";
+      await markSyncOutboxRowSynced(input.executor, {
+        id: row.id,
+        remoteRevision: null,
+        now: now(),
+      });
+      result.skipped.push({
+        outboxId: row.id,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        idempotencyKey: row.idempotency_key,
+        reason,
+      });
+      continue;
+    }
+
     const syncingRow = await markSyncOutboxRowSyncing(input.executor, {
       id: row.id,
       now: now(),

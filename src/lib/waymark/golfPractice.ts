@@ -24,6 +24,7 @@ import type {
   GolfWorkoutType,
   SaveGolfPracticeLogInput,
 } from "../../types/golfPractice";
+import { buildGolfProgramPracticePlanForTitle, golfProgramRoutineTitle, findGolfProgramWeekByTitle } from "../../config/golfProgramCatalog";
 import { buildPuttingShortGamePracticePlanForMarkTitle } from "./golfPracticeMark";
 
 type GolfLogMetadata =
@@ -41,7 +42,13 @@ type GolfLogMetadata =
   | {
       kind: "golf_swing";
       workoutType: "swing";
+      setNumber?: number;
+      setRole?: "revision" | "practice";
+      programWeek?: number;
+      sourceWeek?: number;
+      skillTitle?: string;
       club: GolfClub;
+      clubs?: GolfClub[];
       shotType: GolfShotType;
       practiceMode: GolfPracticeMode;
       reps: number;
@@ -111,7 +118,7 @@ async function requireGolfRoutine(
 ): Promise<WorkoutRoutineTemplate> {
   const titles =
     workoutType === "putting" ? resolveShortGameRoutineTitles(markTitle)
-    : ["Golf Practice Swing"];
+    : resolveSwingRoutineTitles(markTitle);
   const routine = (await repositories.strength.listRoutinesByPath(pathId)).find(
     (item) => item.isActive && item.routineType === WorkoutRoutineType.GolfPractice && titles.includes(item.title),
   );
@@ -119,6 +126,11 @@ async function requireGolfRoutine(
     throw new Error(`${titles[0]} routine is not available.`);
   }
   return routine;
+}
+
+function resolveSwingRoutineTitles(markTitle?: string) {
+  const programWeek = findGolfProgramWeekByTitle(markTitle);
+  return programWeek ? [golfProgramRoutineTitle(programWeek), "Golf Practice Swing"] : ["Golf Practice Swing"];
 }
 
 function resolveShortGameRoutineTitles(markTitle?: string) {
@@ -310,13 +322,19 @@ function buildSwingLogs(
     return {
       id: generateEntityId("exercise_set_log"),
       sessionExerciseSnapshotId: snapshot.id,
-      setNumber: 1,
+      setNumber: set.setNumber,
       actualReps: set.reps,
       completed: true,
       metadata: {
         kind: "golf_swing",
         workoutType: "swing",
+        setNumber: set.setNumber,
+        setRole: set.setRole,
+        programWeek: set.programWeek,
+        sourceWeek: set.sourceWeek,
+        skillTitle: set.skillTitle,
         club: set.club,
+        clubs: set.clubs,
         shotType: set.shotType,
         practiceMode: set.practiceMode,
         reps: set.reps,
@@ -347,9 +365,12 @@ export async function saveGolfPracticeLog(
     throw new Error("Golf Practice mark does not belong to the current user.");
   }
   const pathId = existingMark?.pathId ?? (await requireGolfPathId(repositories, userId));
-  const routine = await requireGolfRoutine(repositories, pathId, input.workoutType, existingMark?.title);
+  const routine = input.routineTemplateId
+    ? await requireSelectedGolfRoutine(repositories, pathId, input.routineTemplateId)
+    : await requireGolfRoutine(repositories, pathId, input.workoutType, existingMark?.title);
   const trailDay = await repositories.trailDays.getOrCreateTrailDay(userId, completedAt.slice(0, 10));
-  const title = input.workoutType === "putting" ? "Golf Practice Short Game" : "Golf Practice Swing";
+  const programPlan = input.workoutType === "swing" ? buildGolfProgramPracticePlanForTitle(existingMark?.title) : null;
+  const title = input.workoutType === "putting" ? "Golf Practice Short Game" : programPlan?.title ?? "Golf Practice Swing";
 
   return repositories.transaction.runInTransaction(async (repos) => {
     const mark = existingMark
@@ -399,6 +420,18 @@ export async function saveGolfPracticeLog(
 
     return { markId: mark.id, workoutSessionInstanceId: session.id };
   });
+}
+
+async function requireSelectedGolfRoutine(
+  repositories: WaymarkRepositories,
+  pathId: EntityId,
+  routineTemplateId: EntityId,
+): Promise<WorkoutRoutineTemplate> {
+  const routine = await repositories.strength.getRoutineById(routineTemplateId);
+  if (!routine || !routine.isActive || routine.pathId !== pathId || routine.routineType !== WorkoutRoutineType.GolfPractice) {
+    throw new Error("Selected Golf Practice routine is not available.");
+  }
+  return routine;
 }
 
 function parseGolfSessionNotes(notes?: string): { workoutType?: GolfWorkoutType } {

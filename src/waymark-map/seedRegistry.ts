@@ -29,6 +29,39 @@ export async function saveSeedRecord(
   return record;
 }
 
+export async function replaceSeedRecordForSource(
+  settings: AppSettingsRepository,
+  userId: string,
+  record: SeedRecord,
+): Promise<SeedRecord> {
+  await replaceSeedRecordsForSources(settings, userId, [record]);
+  return record;
+}
+
+export async function replaceSeedRecordsForSources(
+  settings: AppSettingsRepository,
+  userId: string,
+  records: SeedRecord[],
+): Promise<SeedRecord[]> {
+  const existingRecords = await listSeedRecords(settings, userId);
+  const replacements = new Map(
+    records.map((record) => [`${record.entityType}:${record.sourceSeedId}`, record] as const),
+  );
+  const staleRecords = existingRecords.filter(
+    (candidate) => {
+      const replacement = replacements.get(`${candidate.entityType}:${candidate.sourceSeedId}`);
+      return replacement !== undefined && candidate.entityId !== replacement.entityId;
+    },
+  );
+  for (const stale of staleRecords) {
+    await settings.deleteSetting(userId, buildSeedRecordKey(stale.entityType, stale.entityId));
+  }
+  for (const record of records) {
+    await saveSeedRecord(settings, userId, record);
+  }
+  return records;
+}
+
 export async function listSeedRecords(settings: AppSettingsRepository, userId: string): Promise<SeedRecord[]> {
   const all = await settings.listSettings(userId);
   return all

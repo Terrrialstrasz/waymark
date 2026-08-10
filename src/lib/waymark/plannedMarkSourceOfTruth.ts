@@ -6,6 +6,8 @@ import {
 } from "../../domain/waymark/enums";
 import type { SignalEngine } from "../../domain/waymark/services";
 import { getMarkMetadata, setMarkMetadata, type MarkMetadata } from "./markMetadataStore";
+import { createDailyPlanEngine } from "./dailyPlanEngine";
+import { projectConfirmedDailyPlan } from "./confirmedDailyPlanProjection";
 
 const LEGACY_AUTO_GENERATED_UNRESOLVED_STATUSES = new Set<MarkInstanceStatus>([
   MarkInstanceStatus.Planned,
@@ -89,6 +91,52 @@ export async function recomputeTrailDayCountersForDate(
     return null;
   }
   return recomputeTrailDayCountersForTrailDay(repos, trailDay.id);
+}
+
+/**
+ * Recomputes counters whose meaning is the committed/effective work for one
+ * TrailDay. Weekly import and future-planning callers intentionally continue
+ * to use recomputeTrailDayCountersForDate above.
+ */
+export async function recomputeEffectiveTrailDayExecutionCounters(
+  repos: WaymarkRepositories,
+  userId: string,
+  localDate: string,
+) {
+  const trailDay = await repos.trailDays.getTrailDayByDate(userId, localDate);
+  if (!trailDay) {
+    return null;
+  }
+  const dailyPlanEngine = createDailyPlanEngine(repos);
+  if ((await dailyPlanEngine.getCloseCompatibility(userId, localDate)) === "legacy") {
+    return recomputeTrailDayCountersForTrailDay(repos, trailDay.id);
+  }
+  const plan = await dailyPlanEngine.resolveEffectiveDailyPlan(userId, localDate);
+  const projection = plan.state?.status === "confirmed" ? projectConfirmedDailyPlan(plan) : null;
+  const completedMarkCount = projection?.completedCount ?? plan.effectiveMarks.filter(
+    (mark) => mark.status === MarkInstanceStatus.Completed,
+  ).length;
+  const skippedMarkCount = projection?.skippedAfterConfirmCount ?? plan.lineages.filter(
+    (lineage) =>
+      lineage.leaf.trailDayId === trailDay.id && lineage.leaf.status === MarkInstanceStatus.Skipped,
+  ).length;
+  const memoryCount = (await repos.memories.listMemoriesByTrailDay(trailDay.id)).length;
+  const plannedMarkCount = projection?.confirmedPlannedCount ?? plan.effectiveMarks.length;
+
+  if (
+    trailDay.plannedMarkCount === plannedMarkCount &&
+    trailDay.completedMarkCount === completedMarkCount &&
+    trailDay.skippedMarkCount === skippedMarkCount &&
+    trailDay.memoryCount === memoryCount
+  ) {
+    return trailDay;
+  }
+  return repos.trailDays.updateTrailDay(trailDay.id, {
+    plannedMarkCount,
+    completedMarkCount,
+    skippedMarkCount,
+    memoryCount,
+  });
 }
 
 export async function cleanupLegacyTemplateGeneratedMarks(

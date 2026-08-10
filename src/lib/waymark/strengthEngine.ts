@@ -309,6 +309,18 @@ function getProgressionRuleForExercise(
   exerciseDefinition: ExerciseDefinition,
   routineExerciseTemplate?: RoutineExerciseTemplate | null,
 ): ProgressionRule | null {
+  const policy = routineExerciseTemplate?.progressionPolicy;
+  if (policy) {
+    return {
+      thresholdSessions: Math.max(policy.successfulSessionsRequired ?? policy.minimumCompletedSets ?? 1, 1),
+      loadIncrementKg: policy.loadIncrementKg,
+      durationIncrementSec: policy.durationIncrementSec,
+      repIncrement: policy.repIncrement ?? (policy.repCeiling ? 1 : undefined),
+      capReps: policy.repCeiling,
+      capDurationSec: policy.durationCeilingSec,
+    };
+  }
+
   const slug = normalizeText(exerciseDefinition.canonicalSlug || exerciseDefinition.title);
   if (slug.includes("barbell squat") || slug.includes("squat")) {
     return { thresholdSessions: 2, loadIncrementKg: 2.5 };
@@ -331,19 +343,7 @@ function getProgressionRuleForExercise(
   if (slug.includes("ab wheel") || slug.includes("ab wheel rollout") || slug.includes("rollout")) {
     return { thresholdSessions: 1, repIncrement: 1, capReps: 30 };
   }
-
-  const policy = routineExerciseTemplate?.progressionPolicy;
-  if (!policy) {
-    return null;
-  }
-
-  return {
-    thresholdSessions: Math.max(policy.minimumCompletedSets ?? 1, 1),
-    loadIncrementKg: policy.loadIncrementKg,
-    durationIncrementSec: policy.durationIncrementSec,
-    repIncrement: policy.repCeiling ? 1 : undefined,
-    capReps: policy.repCeiling,
-  };
+  return null;
 }
 
 function evaluateSnapshotSuccess(snapshot: SessionExerciseSnapshot, logs: ExerciseSetLog[]): boolean {
@@ -620,8 +620,14 @@ export class DefaultStrengthSessionEngine implements StrengthSessionEngine {
         throw new StrengthEngineValidationError(`Mark ${mark.id} in status ${mark.status} cannot start a workout session.`);
       }
 
+      const selectedRoutine = input.routineTemplateId ? await this.requireSelectableRoutineForMark(repos, mark, input.routineTemplateId) : undefined;
       const session = await this.reconcileLegacyInFlightSession(
-        await this.reconcilePristineSessionForMark(await this.getOrCreateSessionForMark(repos, mark), mark, repos),
+        await this.reconcilePristineSessionForMark(
+          await this.getOrCreateSessionForMark(repos, mark, selectedRoutine),
+          mark,
+          repos,
+          selectedRoutine,
+        ),
         repos,
       );
       const sessionWithCooldownSnapshots = await this.reconcileMissingCooldownSnapshots(session, repos);
@@ -1271,13 +1277,14 @@ export class DefaultStrengthSessionEngine implements StrengthSessionEngine {
   private async getOrCreateSessionForMark(
     repos: WaymarkRepositories,
     mark: MarkInstance,
+    selectedRoutine?: WorkoutRoutineTemplate,
   ): Promise<WorkoutSessionInstance> {
     const existing = await repos.strength.getSessionByMarkInstance(mark.id);
     if (existing) {
       return existing;
     }
 
-    const routine = await this.resolveRoutineForMark(repos, mark);
+    const routine = selectedRoutine ?? await this.resolveRoutineForMark(repos, mark);
     try {
       return await repos.strength.upsertSession({
         id: generateEntityId("workout_session"),
@@ -1360,16 +1367,38 @@ export class DefaultStrengthSessionEngine implements StrengthSessionEngine {
     throw new StrengthEngineValidationError(`Could not resolve workout routine for Mark ${mark.id}.`);
   }
 
+  private async requireSelectableRoutineForMark(
+    repos: WaymarkRepositories,
+    mark: MarkInstance,
+    routineTemplateId: EntityId,
+  ): Promise<WorkoutRoutineTemplate> {
+    const routine = await repos.strength.getRoutineById(routineTemplateId);
+    if (!routine || !routine.isActive) {
+      throw new StrengthEngineValidationError(`Workout routine ${routineTemplateId} is not available.`);
+    }
+    if (routine.pathId !== mark.pathId) {
+      throw new StrengthEngineValidationError(`Workout routine ${routineTemplateId} does not belong to Mark ${mark.id}'s path.`);
+    }
+    if (routine.routineType === WorkoutRoutineType.GolfPractice) {
+      throw new StrengthEngineValidationError(`Golf Practice routines cannot be started from the strength workout flow.`);
+    }
+    return routine;
+  }
+
   private async reconcilePristineSessionForMark(
     session: WorkoutSessionInstance,
     mark: MarkInstance,
     repos: WaymarkRepositories,
+    selectedRoutine?: WorkoutRoutineTemplate,
   ): Promise<WorkoutSessionInstance> {
     if (!isPristineSessionStatus(session.status)) {
+      if (selectedRoutine && selectedRoutine.id !== session.routineTemplateId) {
+        throw new StrengthEngineValidationError(`Workout session ${session.id} has already started with a different routine.`);
+      }
       return session;
     }
 
-    const desiredRoutine = await this.resolveRoutineForMark(repos, mark);
+    const desiredRoutine = selectedRoutine ?? await this.resolveRoutineForMark(repos, mark);
     const routineChanged = desiredRoutine.id !== session.routineTemplateId;
     const existingSnapshots = getOrderedSnapshots(await repos.strength.listSessionSnapshots(session.id));
     if (existingSnapshots.length === 0) {

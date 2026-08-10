@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Memory, TrailDay } from "../domain/waymark/entities";
+import type { MarkInstance, Memory, TrailDay } from "../domain/waymark/entities";
 import { MarkInstanceStatus, MediaAssetOwnerType, TrailDayStatus } from "../domain/waymark/enums";
 import { getMarkMetadata, listDisciplineProofsByTrailDay, projectCharacterFromRecords } from "../lib/waymark";
 import { isMarkFinalStatus } from "../lib/waymark/markEngine";
@@ -21,6 +21,8 @@ import {
   type DailyJournalClosedDayCard,
   type DailyJournalViewState,
 } from "./dailyJournalViewState";
+import { createDailyPlanEngine } from "../lib/waymark/dailyPlanEngine";
+import { projectConfirmedDailyPlan } from "../lib/waymark/confirmedDailyPlanProjection";
 
 type JournalRecentRow = {
   id: string;
@@ -152,7 +154,10 @@ export function useWaymarkJournal(locale: Locale, options: { enabled?: boolean }
 
         const dayPayloads = await Promise.all(
           trailDays.map(async (trailDay) => {
-            const marks = await app.repositories.marks.listMarkInstancesByTrailDay(trailDay.id);
+            const marks = await listJournalTrailMarksForTrailDay(
+              { repositories: app.repositories, userId: app.user.id, dailyPlanEngine: app.dailyPlanEngine },
+              trailDay,
+            );
             const memories = await app.repositories.memories.listMemoriesByTrailDay(trailDay.id);
             const reflections = await app.repositories.trailDays.listReflectionEntries(trailDay.id);
             const disciplineProofs = await listDisciplineProofsByTrailDay(
@@ -614,7 +619,7 @@ async function loadDailyJournalData(input: {
   pathLabelById: Map<string, string>;
   pathUiIdById: Map<string, PathId | undefined>;
 }): Promise<DailyJournalData> {
-  const marks = await input.repositories.marks.listMarkInstancesByTrailDay(input.trailDay.id);
+  const marks = await listJournalTrailMarksForTrailDay(input, input.trailDay);
   const memories = await input.repositories.memories.listMemoriesByTrailDay(input.trailDay.id);
   const reflections = await input.repositories.trailDays.listReflectionEntries(input.trailDay.id);
   const disciplineProofs = await listDisciplineProofsByTrailDay(
@@ -726,6 +731,26 @@ async function loadDailyJournalData(input: {
       hasClosedTrail: input.trailDay.status === TrailDayStatus.Closed,
     },
   };
+}
+
+async function listJournalTrailMarksForTrailDay(
+  input: Pick<WaymarkAppServices, "repositories"> & { userId: string; dailyPlanEngine?: WaymarkAppServices["dailyPlanEngine"] },
+  trailDay: TrailDay,
+): Promise<MarkInstance[]> {
+  const dailyPlanEngine = input.dailyPlanEngine ?? createDailyPlanEngine(input.repositories);
+  if ((await dailyPlanEngine.getCloseCompatibility(input.userId, trailDay.date)) === "legacy") {
+    return input.repositories.marks.listMarkInstancesByTrailDay(trailDay.id);
+  }
+
+  const plan = await dailyPlanEngine.resolveEffectiveDailyPlan(input.userId, trailDay.date);
+  if (plan.state?.status !== "confirmed") {
+    return plan.effectiveMarks;
+  }
+
+  return projectConfirmedDailyPlan(plan)
+    .entries
+    .map((entry) => entry.outcomeMark)
+    .filter((mark) => mark.trailDayId === trailDay.id);
 }
 
 function toJournalImageSource(

@@ -3,11 +3,14 @@ import { DatabaseSync } from "node:sqlite";
 import { applyMigrationsAsync } from "../src/db/migrations/runner";
 import {
   buildTypedHierarchyMutationId,
+  getWaymarkTursoRemoteSchemaSql,
   uploadHierarchyProjectionToTurso,
-  type TursoPlanningExpeditionSnapshot,
+  type TursoPlanningExpeditionProgressPatch,
   type TursoPlanningMarkInstanceSnapshot,
+  type TursoPlanningMilestoneProgressPatch,
   type TursoPlanningMutationResult,
   type TursoPlanningPathSnapshot,
+  type TursoPlanningTrailDaySnapshot,
 } from "../src/lib/waymark";
 
 type RunResult = {
@@ -53,10 +56,15 @@ class NodeSqliteAdapter {
 
 class FakeHierarchyAdapter {
   calls: Array<{
-    entityType: "path" | "expedition" | "mark_instance";
+    entityType: "path" | "expedition" | "milestone" | "trail_day" | "mark_instance";
     entityId: string;
     mutationId: string;
-    snapshot: TursoPlanningPathSnapshot | TursoPlanningExpeditionSnapshot | TursoPlanningMarkInstanceSnapshot;
+    snapshot:
+      | TursoPlanningPathSnapshot
+      | TursoPlanningExpeditionProgressPatch
+      | TursoPlanningMilestoneProgressPatch
+      | TursoPlanningTrailDaySnapshot
+      | TursoPlanningMarkInstanceSnapshot;
   }> = [];
   seen = new Map<string, TursoPlanningMutationResult>();
 
@@ -67,11 +75,25 @@ class FakeHierarchyAdapter {
     return this.record("path", input.snapshot.id, input.mutationId, input.snapshot);
   }
 
-  async upsertPlanningExpeditionSnapshot(input: {
-    snapshot: TursoPlanningExpeditionSnapshot;
+  async updatePlanningExpeditionProgressPatch(input: {
+    patch: TursoPlanningExpeditionProgressPatch;
     mutationId: string;
   }): Promise<TursoPlanningMutationResult> {
-    return this.record("expedition", input.snapshot.id, input.mutationId, input.snapshot);
+    return this.record("expedition", input.patch.id, input.mutationId, input.patch);
+  }
+
+  async upsertPlanningTrailDaySnapshot(input: {
+    snapshot: TursoPlanningTrailDaySnapshot;
+    mutationId: string;
+  }): Promise<TursoPlanningMutationResult> {
+    return this.record("trail_day", input.snapshot.id, input.mutationId, input.snapshot);
+  }
+
+  async updatePlanningMilestoneProgressPatch(input: {
+    patch: TursoPlanningMilestoneProgressPatch;
+    mutationId: string;
+  }): Promise<TursoPlanningMutationResult> {
+    return this.record("milestone", input.patch.id, input.mutationId, input.patch);
   }
 
   async upsertPlanningMarkInstanceSnapshot(input: {
@@ -82,10 +104,15 @@ class FakeHierarchyAdapter {
   }
 
   private record(
-    entityType: "path" | "expedition" | "mark_instance",
+    entityType: "path" | "expedition" | "milestone" | "trail_day" | "mark_instance",
     entityId: string,
     mutationId: string,
-    snapshot: TursoPlanningPathSnapshot | TursoPlanningExpeditionSnapshot | TursoPlanningMarkInstanceSnapshot,
+    snapshot:
+      | TursoPlanningPathSnapshot
+      | TursoPlanningExpeditionProgressPatch
+      | TursoPlanningMilestoneProgressPatch
+      | TursoPlanningTrailDaySnapshot
+      | TursoPlanningMarkInstanceSnapshot,
   ): TursoPlanningMutationResult {
     this.calls.push({ entityType, entityId, mutationId, snapshot });
     const existing = this.seen.get(mutationId);
@@ -116,12 +143,12 @@ async function run() {
     buildTypedHierarchyMutationId({
       vaultId: "vault_1",
       deviceId: "device_1",
-      entityType: "mark_instance",
-      entityId: "mark_1",
+      entityType: "milestone",
+      entityId: "milestone_1",
       localRevision: 3,
       payloadHash: "abc123",
     }),
-    "typed_hierarchy:vault_1:device_1:mark_instance:mark_1:3:abc123",
+    "typed_hierarchy:vault_1:device_1:milestone:milestone_1:3:abc123",
   );
 
   const harness = await createHarness();
@@ -182,18 +209,39 @@ async function run() {
       4,
     );
     await harness.db.runAsync(
+      `INSERT INTO milestones (
+        id, user_id, expedition_id, title, description, status, start_date,
+        target_date, sort_order, order_index, completed_at, created_at, updated_at,
+        deleted_at, sync_status, local_revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'dirty', ?);`,
+      "milestone_1",
+      "user_1",
+      "expedition_1",
+      "Reach 75kg",
+      "Milestone detail",
+      "planned",
+      "2026-08-03",
+      "2026-08-09",
+      1,
+      1,
+      null,
+      15,
+      25,
+      6,
+    );
+    await harness.db.runAsync(
       `INSERT INTO trail_days (
         id, user_id, local_date, status, anchor_path_id, planned_mark_count,
         completed_mark_count, skipped_mark_count, memory_count, created_at, updated_at,
         deleted_at, sync_status, local_revision
-      ) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?, NULL, 'dirty', ?);`,
+      ) VALUES (?, ?, ?, ?, ?, 1, 0, 0, 0, ?, ?, NULL, 'dirty', ?);`,
       "trail_day_1",
       "user_1",
-      "2026-07-25",
+      "2026-08-06",
       "open",
       "path_1",
-      14,
-      24,
+      16,
+      26,
       1,
     );
     await harness.db.runAsync(
@@ -210,9 +258,9 @@ async function run() {
       "trail_day_1",
       null,
       "expedition_1",
-      null,
-      "Practice bunker shot",
-      "Mark detail",
+      "milestone_1",
+      "Reach 75kg check-in",
+      "Historical or weekly planned mark",
       "weekly_planned",
       "planned",
       100,
@@ -227,9 +275,9 @@ async function run() {
       null,
       null,
       "generation_1",
-      15,
-      25,
-      6,
+      17,
+      27,
+      7,
     );
 
     const adapter = new FakeHierarchyAdapter();
@@ -246,21 +294,231 @@ async function run() {
       deviceId: "device_1",
     });
 
-    assert.equal(first.scanned, 3);
-    assert.equal(first.uploaded, 3);
+    assert.equal(first.scanned, 5);
+    assert.equal(first.uploaded, 5);
     assert.equal(first.duplicates, 0);
     assert.equal(first.failed.length, 0);
-    assert.equal(second.scanned, 3);
+    assert.equal(second.scanned, 5);
     assert.equal(second.uploaded, 0);
-    assert.equal(second.duplicates, 3);
+    assert.equal(second.duplicates, 5);
     assert.deepEqual(
-      adapter.calls.slice(0, 3).map((call) => call.entityType),
-      ["path", "expedition", "mark_instance"],
+      adapter.calls.slice(0, 5).map((call) => call.entityType),
+      ["path", "trail_day", "expedition", "milestone", "mark_instance"],
     );
-    assert.equal(adapter.calls[2]?.snapshot.title, "Practice bunker shot");
-    assert.match(adapter.calls[2]?.mutationId ?? "", /^typed_hierarchy:vault_1:device_1:mark_instance:mark_1:6:/);
+    assert.equal((adapter.calls[1]?.snapshot as TursoPlanningTrailDaySnapshot).localDate, "2026-08-06");
+    assert.match(adapter.calls[1]?.mutationId ?? "", /^typed_hierarchy:vault_1:device_1:trail_day:trail_day_1:1:/);
+    assert.equal((adapter.calls[3]?.snapshot as TursoPlanningMilestoneProgressPatch).status, "planned");
+    assert.equal("title" in (adapter.calls[3]?.snapshot as Record<string, unknown>), false);
+    assert.equal("description" in (adapter.calls[3]?.snapshot as Record<string, unknown>), false);
+    assert.equal("expeditionId" in (adapter.calls[3]?.snapshot as Record<string, unknown>), false);
+    assert.match(adapter.calls[3]?.mutationId ?? "", /^typed_hierarchy:vault_1:device_1:milestone:milestone_1:6:/);
+    assert.equal((adapter.calls[4]?.snapshot as TursoPlanningMarkInstanceSnapshot).title, "Reach 75kg check-in");
+    assert.match(adapter.calls[4]?.mutationId ?? "", /^typed_hierarchy:vault_1:device_1:mark_instance:mark_1:7:/);
+
+    const syncRows = await harness.db.getAllAsync<{ id: string; sync_status: string }>(
+      "SELECT id, sync_status FROM mark_instances ORDER BY id;",
+    );
+    assert.equal(syncRows.length, 1);
+    assert.equal(syncRows[0]?.id, "mark_1");
+    assert.equal(syncRows[0]?.sync_status, "synced");
+
+    await harness.db.runAsync(
+      "UPDATE mark_instances SET status = 'completed', completed_at = ?, local_revision = 8, sync_status = 'dirty' WHERE id = ?;",
+      300,
+      "mark_1",
+    );
+    const incremental = await uploadHierarchyProjectionToTurso({
+      executor: harness.db as any,
+      adapter: adapter as any,
+      vaultId: "vault_1",
+      deviceId: "device_1",
+      onlyDirty: true,
+    });
+    assert.equal(incremental.scanned, 1);
+    assert.equal(incremental.uploaded, 1);
+    assert.equal(incremental.byEntityType.mark_instance.scanned, 1);
+    assert.equal(adapter.calls.at(-1)?.entityType, "mark_instance");
+    assert.match(adapter.calls.at(-1)?.mutationId ?? "", /^typed_hierarchy:vault_1:device_1:mark_instance:mark_1:8:/);
+
+    await harness.db.runAsync(
+      "UPDATE expeditions SET status = 'completed', completed_at = ?, local_revision = 5, sync_status = 'dirty' WHERE id = ?;",
+      400,
+      "expedition_1",
+    );
+    await harness.db.runAsync(
+      "UPDATE milestones SET status = 'completed', completed_at = ?, local_revision = 9, sync_status = 'dirty' WHERE id = ?;",
+      400,
+      "milestone_1",
+    );
+    const statusUpload = await uploadHierarchyProjectionToTurso({
+      executor: harness.db as any,
+      adapter: adapter as any,
+      vaultId: "vault_1",
+      deviceId: "device_1",
+      onlyDirty: true,
+      entityTypes: ["expedition", "milestone", "trail_day", "mark_instance"],
+    });
+    assert.equal(statusUpload.scanned, 2);
+    assert.equal(statusUpload.uploaded, 2);
+    assert.equal(statusUpload.byEntityType.expedition.scanned, 1);
+    assert.equal(statusUpload.byEntityType.milestone.scanned, 1);
+    assert.equal(adapter.calls.at(-2)?.entityType, "expedition");
+    assert.equal((adapter.calls.at(-2)?.snapshot as TursoPlanningExpeditionProgressPatch).status, "completed");
+    assert.equal("title" in (adapter.calls.at(-2)?.snapshot as Record<string, unknown>), false);
+    assert.equal("pathId" in (adapter.calls.at(-2)?.snapshot as Record<string, unknown>), false);
+    assert.match(adapter.calls.at(-2)?.mutationId ?? "", /^typed_hierarchy:vault_1:device_1:expedition:expedition_1:5:/);
+    assert.equal(adapter.calls.at(-1)?.entityType, "milestone");
+    assert.equal((adapter.calls.at(-1)?.snapshot as TursoPlanningMilestoneProgressPatch).status, "completed");
+    assert.equal("title" in (adapter.calls.at(-1)?.snapshot as Record<string, unknown>), false);
+    assert.equal("expeditionId" in (adapter.calls.at(-1)?.snapshot as Record<string, unknown>), false);
+    assert.match(adapter.calls.at(-1)?.mutationId ?? "", /^typed_hierarchy:vault_1:device_1:milestone:milestone_1:9:/);
   } finally {
     harness.close();
+  }
+
+  assertProgressViews();
+}
+
+function assertProgressViews() {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(getWaymarkTursoRemoteSchemaSql());
+    db.prepare(
+      `INSERT INTO paths (
+        id, vault_id, user_id, name, slug, title, status, sort_order, is_active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    ).run("path_1", "vault_1", "user_1", "Health", "health", "Health", "active", 1, 1, 1, 1);
+    db.prepare(
+      `INSERT INTO expeditions (
+        id, vault_id, user_id, path_id, title, status, sort_order, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    ).run("expedition_1", "vault_1", "user_1", "path_1", "Cut to 70", "active", 1, 1, 1);
+    const insertMilestone = db.prepare(
+      `INSERT INTO milestones (
+        id, vault_id, user_id, expedition_id, title, status, sort_order, order_index, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    );
+    insertMilestone.run("milestone_1", "vault_1", "user_1", "expedition_1", "Reach 75kg", "active", 1, 1, 1, 1);
+    insertMilestone.run("milestone_2", "vault_1", "user_1", "expedition_1", "Reach 73kg", "planned", 2, 2, 1, 1);
+
+    const insertTrailDay = db.prepare(
+      `INSERT INTO trail_days (
+        id, vault_id, user_id, local_date, status, anchor_path_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+    );
+    insertTrailDay.run("trail_1", "vault_1", "user_1", "2026-08-01", "closed", "path_1", 1, 1);
+    insertTrailDay.run("trail_2", "vault_1", "user_1", "2026-08-02", "closed", "path_1", 1, 1);
+    insertTrailDay.run("trail_3", "vault_1", "user_1", "2026-08-03", "open", "path_1", 1, 1);
+
+    const insertMark = db.prepare(
+      `INSERT INTO mark_instances (
+        id, vault_id, user_id, path_id, trail_day_id, expedition_id, milestone_id,
+        title, origin, status, scheduled_start_at, completed_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    );
+    insertMark.run(
+      "mark_completed",
+      "vault_1",
+      "user_1",
+      "path_1",
+      "trail_1",
+      "expedition_1",
+      "milestone_1",
+      "Historical check-in",
+      "manual_plan",
+      "completed",
+      100,
+      150,
+      1,
+      150,
+    );
+    insertMark.run(
+      "mark_partial",
+      "vault_1",
+      "user_1",
+      "path_1",
+      "trail_2",
+      "expedition_1",
+      "milestone_1",
+      "Partial check-in",
+      "manual_plan",
+      "partially_completed",
+      200,
+      null,
+      1,
+      200,
+    );
+    insertMark.run(
+      "mark_week",
+      "vault_1",
+      "user_1",
+      "path_1",
+      "trail_3",
+      "expedition_1",
+      null,
+      "Weekly planned check-in",
+      "weekly_planned",
+      "planned",
+      300,
+      null,
+      1,
+      300,
+    );
+    db.prepare(
+      `INSERT INTO week_plans (
+        id, vault_id, user_id, week_start_date, week_end_date, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+    ).run("week_1", "vault_1", "user_1", "2026-08-03", "2026-08-09", "active", 1, 1);
+    db.prepare(
+      `INSERT INTO week_plan_items (
+        id, vault_id, user_id, week_plan_id, status, local_date, start_time, end_time,
+        title, path_id, expedition_id, created_mark_instance_id, sort_order, order_index,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    ).run(
+      "week_item_1",
+      "vault_1",
+      "user_1",
+      "week_1",
+      "planned",
+      "2026-08-06",
+      "08:00",
+      "08:30",
+      "Weekly planned check-in",
+      "path_1",
+      "expedition_1",
+      "mark_week",
+      1,
+      1,
+      1,
+      1,
+    );
+
+    const expedition = db.prepare("SELECT * FROM expedition_progress WHERE expedition_id = ?;").get("expedition_1") as any;
+    assert.equal(expedition.milestone_count, 2);
+    assert.equal(expedition.total_mark_count, 3);
+    assert.equal(expedition.completed_mark_count, 1);
+    assert.equal(expedition.open_mark_count, 1);
+    assert.equal(expedition.progress_percent, 50);
+
+    const milestone = db.prepare("SELECT * FROM milestone_progress WHERE milestone_id = ?;").get("milestone_1") as any;
+    assert.equal(milestone.total_mark_count, 2);
+    assert.equal(milestone.completed_mark_count, 1);
+    assert.equal(milestone.partially_completed_mark_count, 1);
+    assert.equal(milestone.progress_percent, 75);
+
+    const hierarchyRows = db
+      .prepare("SELECT * FROM expedition_milestone_marks WHERE expedition_id = ?;")
+      .all("expedition_1");
+    assert.equal(hierarchyRows.length, 4);
+
+    const weeklyMark = db
+      .prepare("SELECT * FROM expedition_planned_marks WHERE mark_instance_id = ?;")
+      .get("mark_week") as any;
+    assert.equal(weeklyMark.week_start_date, "2026-08-03");
+    assert.equal(weeklyMark.planned_local_date, "2026-08-06");
+  } finally {
+    db.close();
   }
 }
 

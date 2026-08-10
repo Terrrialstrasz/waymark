@@ -66,3 +66,101 @@ export type PathDetailItem = {
   whyThisPathBody?: LocalizedString;
   pulseMetrics?: PathPulseMetric[];
 };
+
+export type PathDetailMilestoneItem = {
+  id: string;
+  title: string;
+  description?: string;
+  status: "active" | "planned" | "completed" | "missed" | "archived";
+  startDate?: string;
+  targetDate?: string;
+  completedAt?: string;
+  sortOrder: number;
+  orderIndex?: number;
+  marks: PathDetailMarkItem[];
+};
+
+export type PathDetailMarkItem = {
+  id: string;
+  title: string;
+  status:
+    | "planned"
+    | "ready"
+    | "blocked"
+    | "active"
+    | "completed"
+    | "partially_completed"
+    | "skipped"
+    | "rescheduled"
+    | "substituted"
+    | "expired"
+    | "cancelled";
+  scheduledStartAt?: string;
+  scheduledEndAt?: string;
+  dueAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  sortTime: string;
+  isDone: boolean;
+  isFinal: boolean;
+};
+
+export type PathDetailExpeditionItem = {
+  id: string;
+  pathId: PathId;
+  title: string;
+  description?: string;
+  status: "active" | "planned" | "paused" | "completed" | "archived";
+  startDate?: string;
+  targetDate?: string;
+  sortOrder: number;
+  milestones: PathDetailMilestoneItem[];
+  unassignedMarks: PathDetailMarkItem[];
+};
+
+export type WeeklyMilestoneItem = {
+  id: string;
+  pathRecordId: string;
+  pathId: PathId;
+  pathTitle: string;
+  pathAccent: string;
+  pathAccentDeep: string;
+  pathAccentSoft: string;
+  pathIconAssetId?: string;
+  pathIconSemanticName: import("../../design/waymark-icon-map").WaymarkSemanticIconName;
+  expeditionId: string;
+  expeditionTitle: string;
+  title: string;
+  startDate: string | null;
+  endDate: string | null;
+  completedAt: string | null;
+  status: "active" | "planned" | "completed" | "missed" | "archived";
+  sortOrder: number;
+  marks: WeeklyMilestoneMarkItem[];
+};
+
+export type WeeklyMilestoneMarkItem = {
+  id: string;
+  title: string;
+  status:
+    | "planned"
+    | "ready"
+    | "blocked"
+    | "active"
+    | "completed"
+    | "partially_completed"
+    | "skipped"
+    | "rescheduled"
+    | "substituted"
+    | "expired"
+    | "cancelled";
+  localDate: string;
+  dayLabel: string;
+  isDone: boolean;
+  expeditionTitle?: string;
+  milestoneTitle?: string;
+  description?: string;
+  scheduledStartAt?: string;
+  scheduledEndAt?: string;
+  dueAt?: string;
+};

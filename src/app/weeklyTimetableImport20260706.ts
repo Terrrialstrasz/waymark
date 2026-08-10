@@ -72,7 +72,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
     allowOverlap,
   };
 }
@@ -227,6 +227,7 @@ export async function importWeeklyTimetable20260706To0712(
     weekEndDate: "2026-07-12",
     note: "Imported from approved weekly timetable 2026-07-06 to 2026-07-12. Work/Career Monday-Wednesday; Family/Home Thursday-Sunday with Waymark afternoon blocks on 2026-07-09 and 2026-07-10. Signals are scheduled as full-screen alarms by the app alarm adapter.",
     importBatchId: "weekly_timetable_2026_07_06_2026_07_12_family_golf_waymark_signals",
+    allowTitleRefs: true,
     items: buildWeeklyTimetable20260706To0712(catalog),
     setMarkDueAt: false,
   });

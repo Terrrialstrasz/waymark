@@ -1,11 +1,9 @@
 import { StyleSheet, View } from "react-native";
 import { ExpeditionDetailItem } from "./types";
 import { JournalCard } from "../primitives/JournalCard";
-import { IconBadge } from "../primitives/IconBadge";
 import { WMText } from "../primitives/Text";
 import { foundationColors, spacing } from "../../theme/tokens";
 import { Locale } from "../../types/ui";
-import { ExpeditionProgressBlock } from "./ExpeditionProgressBlock";
 import { formatExpeditionDateRangeLong } from "./detailModel";
 import { getCopy } from "../../i18n/copy";
 
@@ -23,7 +21,6 @@ export function ExpeditionSummaryCard({ expedition, locale }: Props) {
   return (
     <JournalCard decorative decorationPreset="entityCard" style={styles.card} variant="hero">
       <View style={styles.headerRow}>
-        <IconBadge semanticName="entity.expedition" shape="circle" size="md" tone="green" />
         <WMText style={styles.title} variant="pageTitle">
           {summaryTitle}
         </WMText>
@@ -38,8 +35,6 @@ export function ExpeditionSummaryCard({ expedition, locale }: Props) {
           {dateRange}
         </WMText>
       ) : null}
-
-      <ExpeditionProgressBlock accentColor={expedition.pathAccent ?? expedition.pathColor} locale={locale} percentComplete={expedition.percentComplete} />
 
       <View style={styles.statsRow}>
         <SummaryStat label={copy.labels.marks} value={`${expedition.completedMarks} / ${expedition.totalMarks}`} />

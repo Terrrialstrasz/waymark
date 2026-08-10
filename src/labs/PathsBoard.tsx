@@ -11,11 +11,10 @@ import { WhyThisPathCard } from "../components/paths/WhyThisPathCard";
 import { ExpeditionsTemplate } from "../components/expeditions/ExpeditionsTemplate";
 import { ExpeditionFilterPanel } from "../components/expeditions/ExpeditionFilterPanel";
 import { PathExpeditionCard } from "../components/expeditions/PathExpeditionCard";
-import type { CurrentExpeditionItem } from "../components/today/__fixtures__/todayExpedition.fixtures";
 import { getPathsCopy } from "../i18n/pathsCopy";
 import { NextMarksList } from "../components/paths/NextMarksList";
 import { RecentProofList } from "../components/paths/RecentProofList";
-import { NextMarkItem, PathDetailItem, PathProofItem, PathRowItem, PathStatCardItem } from "../components/paths/types";
+import { NextMarkItem, PathDetailExpeditionItem, PathDetailItem, PathProofItem, PathRowItem, PathStatCardItem } from "../components/paths/types";
 import { ExpeditionFilterPathOption, PathExpeditionItem } from "../components/expeditions/types";
 
 type Props = {
@@ -182,22 +181,66 @@ const expeditions: PathExpeditionItem[] = [
   },
 ];
 
-const currentPathExpeditions: CurrentExpeditionItem[] = [
+const currentPathExpeditions: PathDetailExpeditionItem[] = [
   {
     id: "exp-active",
-    title: { en: "Quiet client care refresh", vi: "Lam moi lai nhip cham soc khach hang mot cach yen tinh" },
-    milestoneLabel: { en: "Milestone: Restore useful follow-up cadence", vi: "Cot moc: Dung lai nhip follow-up huu ich" },
-    deadlineLabel: { en: "Deadline: Fri", vi: "Han: Thu Sau" },
     pathId: "career",
-    detailEnabled: true,
+    title: "Quiet client care refresh",
+    description: "Restore tone, cadence, and useful follow-up proof.",
+    status: "active",
+    targetDate: "2026-08-09",
+    sortOrder: 1,
+    unassignedMarks: [
+      {
+        id: "mark-expedition-level-scope-note",
+        title: "Write expedition scope note",
+        status: "planned",
+        scheduledStartAt: "2026-08-08T09:00:00.000",
+        dueAt: "2026-08-08T10:00:00.000",
+        createdAt: "2026-08-03T08:00:00.000",
+        sortTime: "2026-08-08T09:00:00.000",
+        isDone: false,
+        isFinal: false,
+      },
+    ],
+    milestones: [
+      {
+        id: "ms-follow-up",
+        title: "Restore useful follow-up cadence",
+        status: "active",
+        startDate: "2026-08-03",
+        targetDate: "2026-08-09",
+        sortOrder: 1,
+        marks: [],
+      },
+      {
+        id: "ms-client-note",
+        title: "Send one calm client note",
+        status: "planned",
+        targetDate: "2026-08-12",
+        sortOrder: 2,
+        marks: [],
+      },
+    ],
   },
   {
     id: "exp-planning",
-    title: { en: "Family intro clinic", vi: "Buoi trai nghiem gia dinh SNAG" },
-    milestoneLabel: { en: "Milestone: Lock field-ready intro shape", vi: "Cot moc: Chot hinh dang gioi thieu san sang ra hien truong" },
-    deadlineLabel: { en: "Deadline: Optional", vi: "Han: Tuy chon" },
     pathId: "snag",
-    detailEnabled: true,
+    title: "Family intro clinic",
+    description: "Prepare a field-ready intro season.",
+    status: "planned",
+    sortOrder: 2,
+    unassignedMarks: [],
+    milestones: [
+      {
+        id: "ms-intro-shape",
+        title: "Lock field-ready intro shape",
+        status: "planned",
+        targetDate: "2026-08-16",
+        sortOrder: 1,
+        marks: [],
+      },
+    ],
   },
 ];
 
@@ -331,7 +374,7 @@ export function PathsBoard({ locale }: Props) {
             locale={locale}
             nextMarks={nextMarks.slice(0, 4)}
             onBack={() => Alert.alert("Back", detailPath.title[locale])}
-            onOpenExpedition={(item) => Alert.alert("Expedition", item.title[locale])}
+            onOpenExpedition={(item) => Alert.alert("Expedition", item.title)}
             onOpenNextMark={(item) => Alert.alert("Mark", item.title[locale])}
             onOpenProof={(item) => Alert.alert(item.kind, item.title[locale])}
             onViewAllExpeditions={() => Alert.alert("Expeditions", "view all")}

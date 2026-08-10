@@ -28,7 +28,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
   };
 }
 
@@ -207,6 +207,7 @@ export async function importWeeklyTimetable20260608To0614(
     weekEndDate: "2026-06-14",
     note: "Imported from approved weekly timetable 2026-06-08 to 2026-06-14.",
     importBatchId: "weekly_timetable_2026_06_08_2026_06_14_approved",
+    allowTitleRefs: true,
     items: buildWeeklyTimetable20260608To0614(catalog),
   });
 

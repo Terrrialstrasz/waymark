@@ -352,6 +352,7 @@ function buildStrengthSessionUiModel({
     dayLabel:
       dayType === "day_b" ? (locale === "vi" ? "Ngay B" : "Day B")
       : dayType === "walk" ? (locale === "vi" ? "Di bo" : "Walk")
+      : dayType === "bodyweight_rep_progress" ? "Home Workout"
       : locale === "vi" ? "Ngay A"
       : "Day A",
     totalDurationLabel: formatDurationLabel(locale, estimatedDurationMin),
@@ -692,6 +693,9 @@ function formatCountLabel(locale: Locale, count: number, nounEn: string, nounVi:
 
 function inferWorkoutDayType(routineTitle: string, markTitle: string): WorkoutDayType {
   const normalized = `${routineTitle} ${markTitle}`.toLowerCase();
+  if (normalized.includes("home workout") || normalized.includes("body weight rep progress") || normalized.includes("bodyweight")) {
+    return "bodyweight_rep_progress";
+  }
   if (normalized.includes("walk")) {
     return "walk";
   }

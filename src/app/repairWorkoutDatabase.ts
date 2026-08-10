@@ -8,6 +8,7 @@ import {
 export async function repairWorkoutDatabase(
   repositories: WaymarkRepositories,
   userId: string,
+  sourceSeedIds?: readonly string[],
 ): Promise<AuthoritativeWorkoutRoutineRepairResult> {
   return repairAuthoritativeWorkoutRoutines(
     {
@@ -15,5 +16,6 @@ export async function repairWorkoutDatabase(
       userId,
     },
     WAYMARK_MAP_CONFIG,
+    sourceSeedIds,
   );
 }

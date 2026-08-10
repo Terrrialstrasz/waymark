@@ -30,7 +30,6 @@ export interface BacklogTemplateProps {
   onFilterChange?: (filter: BacklogFilterValue) => void;
   onOpenBacklogItem?: (itemId: string) => void;
   onDeleteBacklogItem?: (itemId: string) => void;
-  onAddToWeeklyCoding?: (itemId: string) => void;
   onCreateMarkFromBacklog?: (itemId: string) => void;
   featureFlags?: BacklogFeatureFlags;
 }
@@ -51,7 +50,6 @@ export function BacklogTemplate({
   onFilterChange,
   onOpenBacklogItem,
   onDeleteBacklogItem,
-  onAddToWeeklyCoding,
   onCreateMarkFromBacklog,
   featureFlags,
 }: BacklogTemplateProps) {
@@ -69,7 +67,6 @@ export function BacklogTemplate({
   const isFilterActive = selectedFilter !== "all";
   const hasResetView = isQueryActive || isFilterActive;
   const availableActionCount = Number(Boolean(featureFlags?.canDeleteBacklogItem && onDeleteBacklogItem))
-    + Number(Boolean(featureFlags?.canAddToWeeklyCoding && onAddToWeeklyCoding))
     + Number(Boolean(featureFlags?.canCreateMarkFromBacklog && onCreateMarkFromBacklog));
   const showEmptyState = visibleItems.length === 0;
   const emptyMode = items.length === 0 ? "trueEmpty" : isQueryActive ? "searchEmpty" : "filterEmpty";
@@ -148,12 +145,10 @@ export function BacklogTemplate({
 
       <BacklogInlineActionMenu
         anchor={openMenu?.anchor}
-        canAddToWeeklyCoding={featureFlags?.canAddToWeeklyCoding}
         canCreateMarkFromBacklog={featureFlags?.canCreateMarkFromBacklog}
         canDeleteBacklogItem={featureFlags?.canDeleteBacklogItem}
         item={openMenu?.item}
         locale={locale}
-        onAddToWeeklyCoding={onAddToWeeklyCoding}
         onClose={() => setOpenMenu(null)}
         onCreateMarkFromBacklog={onCreateMarkFromBacklog}
         onDeleteBacklogItem={onDeleteBacklogItem}

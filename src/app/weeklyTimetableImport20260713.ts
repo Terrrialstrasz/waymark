@@ -102,7 +102,7 @@ function slot(
     blockKey,
     expeditionId,
     milestoneId,
-    note,
+    description: note,
     allowOverlap,
   };
 }
@@ -263,6 +263,7 @@ export async function importWeeklyTimetable20260713To0719(
     weekEndDate: "2026-07-19",
     note: "Imported from approved Mark + Signal plan 2026-07-13 to 2026-07-19. Weekday golf uses 12:00/18:30, weekend golf uses 05:30/06:00, and golf signals open Planned Marks directly without Golf Practice Pack Checks.",
     importBatchId: "weekly_timetable_2026_07_13_2026_07_19_mark_signal_v3",
+    allowTitleRefs: true,
     items: buildWeeklyTimetable20260713To0719(catalog),
     setMarkDueAt: false,
   });

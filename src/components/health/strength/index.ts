@@ -15,3 +15,4 @@ export * from "./TimedExercisePanel";
 export * from "./types";
 export * from "./WeightValueControl";
 export * from "./WorkoutCompletionSummary";
+export * from "./WorkoutSessionReviewTemplate";

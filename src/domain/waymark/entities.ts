@@ -86,6 +86,7 @@ export interface Milestone extends UserScopedRecord {
   title: string;
   description?: string;
   status: MilestoneStatus;
+  startDate?: LocalDateString;
   targetDate?: LocalDateString;
   sortOrder: number;
   completedAt?: ISODateTimeString;
@@ -142,6 +143,15 @@ export interface MarkInstance extends UserScopedRecord, LocalWindow {
   substitutedByMarkId?: EntityId;
   rescheduledToMarkId?: EntityId;
   sourceBacklogItemId?: EntityId;
+}
+
+export interface MarkInstanceDetail extends LocalRecordMetadata {
+  id: EntityId;
+  markInstanceId: EntityId;
+  primerSnapshot?: string;
+  preActionComment?: string;
+  postActionFeedback?: string;
+  userEditedAt?: ISODateTimeString;
 }
 
 export interface PackCheckTemplate extends UserScopedRecord {
@@ -461,9 +471,12 @@ export interface ReflectionEntry extends LocalRecordMetadata {
 export interface ProgressionPolicy {
   type: ProgressionPolicyType;
   loadIncrementKg?: number;
+  repIncrement?: number;
   repCeiling?: number;
   durationIncrementSec?: number;
+  durationCeilingSec?: number;
   minimumCompletedSets?: number;
+  successfulSessionsRequired?: number;
   allowHigherManualOverride?: boolean;
 }
 
