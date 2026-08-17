@@ -225,6 +225,14 @@ function renderGlyph(name: CodeOwnedWaymarkSemanticIconName, props: GlyphProps) 
         </>
       );
     case "utility.refresh":
+      return (
+        <>
+          <Path d="M21 12a9 9 0 00-15.5-6.2L3 8" {...strokeProps(props)} />
+          <Polyline points="3 3 3 8 8 8" {...strokeProps(props)} />
+          <Path d="M3 12a9 9 0 0015.5 6.2L21 16" {...strokeProps(props)} />
+          <Polyline points="16 16 21 16 21 21" {...strokeProps(props)} />
+        </>
+      );
     case "status.synced":
       return (
         <>

@@ -1,5 +1,5 @@
 import { PropsWithChildren, createContext, useContext, useEffect, useMemo, useState } from "react";
-import { Alert, Image, ImageBackground, StyleSheet, View } from "react-native";
+import { Image, ImageBackground, StyleSheet, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { getWaymarkDatabaseAsync, verifyWaymarkSchemaAsync } from "../db";
 import { createSQLiteRepositoryProvider } from "../db/adapters/SQLiteRepositories";
@@ -14,7 +14,6 @@ import type {
   StrengthSessionEngine,
 } from "../domain/waymark/services";
 import {
-  bootstrapWaymarkMap,
   createCloseTrailEngine,
   createDefaultDependencyEngine,
   createMarkEngine,
@@ -23,11 +22,11 @@ import {
   createStrengthProgressionService,
   createStrengthSessionEngine,
   createDailyPlanEngine,
+  enforceTursoCanonicalWorkspaceCache,
   reconcileLocalWeeklyPlanningMaterialization,
   type DailyPlanEngine,
-  isPulledHierarchyRequiredError,
 } from "../lib/waymark";
-import { recordWaymarkSeedCompletedAsync, runWaymarkVaultBootGateAsync } from "./waymarkVaultBootGate";
+import { runWaymarkVaultBootGateAsync } from "./waymarkVaultBootGate";
 import {
   CompositeSignalAlarmAdapter,
   WaymarkAlarmPermissionBlockedError,
@@ -39,7 +38,6 @@ import {
   openWaymarkExactAlarmSettings,
   openWaymarkFullScreenIntentSettings,
 } from "./waymarkSignalAlarm";
-import { WAYMARK_MAP_CONFIG } from "../waymark-map";
 import { FieldJournalScreenShell } from "../components/primitives/FieldJournalScreenShell";
 import { WMEmptyState } from "../components/primitives/WMEmptyState";
 import { WMButton } from "../components/primitives/WMButton";
@@ -109,8 +107,8 @@ export function WaymarkAppProvider({ children }: PropsWithChildren) {
 
         await timeWaymarkBootstrapStep("vaultBootGate", () =>
           runWaymarkVaultBootGateAsync(db, {
-            mapVersion: WAYMARK_MAP_CONFIG.version,
-            seedVersion: WAYMARK_MAP_CONFIG.version,
+            mapVersion: 0,
+            seedVersion: 0,
           }),
         );
 
@@ -138,6 +136,10 @@ export function WaymarkAppProvider({ children }: PropsWithChildren) {
               : initialUser;
         });
 
+        await timeWaymarkBootstrapStep("tursoCanonicalCache", () =>
+          enforceTursoCanonicalWorkspaceCache({ database: db as any }),
+        );
+
         await timeWaymarkBootstrapStep("notifications", () => initializeWaymarkNotificationsAsync());
         const signalEngine = createSignalEngine(repositories, new CompositeSignalAlarmAdapter(repositories));
         const strengthProgressionService = createStrengthProgressionService(repositories);
@@ -164,50 +166,17 @@ export function WaymarkAppProvider({ children }: PropsWithChildren) {
            ORDER BY last_successful_sync_at DESC
            LIMIT 1;`,
         );
-        let hierarchyWarning: Error | null = null;
-        try {
-          await timeWaymarkBootstrapStep("seedMap", () =>
-            bootstrapWaymarkMap(
-              {
-                repositories,
-                userId: user.id,
-              },
-              WAYMARK_MAP_CONFIG,
-              { trustExistingPulledHierarchy: Boolean(fullDbState) },
-            ),
+        if (fullDbState) {
+          const repair = await timeWaymarkBootstrapStep("fullDbPlanningRepair", () =>
+            reconcileLocalWeeklyPlanningMaterialization({ executor: db as any }),
           );
-          await timeWaymarkBootstrapStep("recordSeedCompleted", () =>
-            recordWaymarkSeedCompletedAsync(db, {
-              mapVersion: WAYMARK_MAP_CONFIG.version,
-              seedVersion: WAYMARK_MAP_CONFIG.version,
-            }),
-          );
-          if (fullDbState) {
-            const repair = await timeWaymarkBootstrapStep("fullDbPlanningRepair", () =>
-              reconcileLocalWeeklyPlanningMaterialization({ executor: db as any }),
-            );
-            if (repair.weekPlanIds.length > 0) {
-              console.info("[WaymarkBootstrap] Reconciled Full-DB planning cache", repair);
-            }
+          if (repair.weekPlanIds.length > 0) {
+            console.info("[WaymarkBootstrap] Reconciled Turso planning cache", repair);
           }
-        } catch (error) {
-          if (!isPulledHierarchyRequiredError(error)) {
-            throw error;
-          }
-          hierarchyWarning = error;
-          console.warn("[WaymarkBootstrap] Pulled hierarchy is required before seed bootstrap", error.message);
         }
 
         if (!cancelled) {
           setState({ status: "ready", services });
-          if (hierarchyWarning) {
-            Alert.alert(
-              user.locale === "vi" ? "Can pull du lieu Waymark" : "Waymark data pull required",
-              user.locale === "vi"
-                ? `Hierarchy chua reconcile duoc voi Turso. Vao Me > Turso Sync va chay Pull Full DB.\n\n${hierarchyWarning.message}`
-                : `Hierarchy could not be reconciled with Turso. Go to Me > Turso Sync and run Pull Full DB.\n\n${hierarchyWarning.message}`,
-            );
-          }
           console.info(`[WaymarkTiming] bootstrap:total:end ${Date.now() - bootstrapStartedAt}ms`);
         }
       } catch (error) {

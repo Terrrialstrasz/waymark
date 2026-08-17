@@ -39,7 +39,6 @@ import {
 } from "../src/domain/waymark";
 import type { CaptureMediaAttachment } from "../src/types/capture";
 import {
-  bootstrapWaymarkMap,
   evaluateWeightMilestoneProgress,
   createCloseTrailEngine,
   createDailyPlanEngine,
@@ -52,16 +51,11 @@ import {
   getMarkMetadata,
   getMarkTemplateSeedMetadata,
   getSignalBehavior,
-  findSeedRecordBySource,
   listHealthMeasurements,
-  listSeedRecords,
-  saveSeedRecord,
   listSignalConfigs,
   listDisciplineProofsByTrailDay,
   loadPackCheckDetailReadModel,
   loadStrengthSessionReadModel,
-  markSeedRecordUserModified,
-  importWeeklyTimetable,
   recordHealthMeasurement,
   getPackCheckSurfacePolicy,
   setPackCheckSurfacePolicy,
@@ -77,10 +71,19 @@ import {
   getWorkoutCycleStep,
   projectCharacterFromRecords,
   RUNTIME_AUTO_GENERATE_PLANNED_MARKS_KEY,
-  repairWeeklyTimetableMilestoneLinksForExpedition,
-  repairAuthoritativeWorkoutRoutines,
   resolveAnchorPathIdForDate,
 } from "../src/lib/waymark";
+import { bootstrapWaymarkMap, repairAuthoritativeWorkoutRoutines } from "../src/waymark-map/bootstrap";
+import {
+  findSeedRecordBySource,
+  listSeedRecords,
+  markSeedRecordUserModified,
+  saveSeedRecord,
+} from "../src/waymark-map/seedRegistry";
+import {
+  importWeeklyTimetable,
+  repairWeeklyTimetableMilestoneLinksForExpedition,
+} from "../src/lib/waymark/weeklyTimetableImport";
 import {
   buildChippingShortGamePracticePlanForMarkTitle,
   buildPuttingShortGamePracticePlanForMarkTitle,
@@ -531,6 +534,7 @@ const tests: TestCase[] = [
           mapVersion: 42,
           seedVersion: 42,
           clientType: "main",
+          applicationId: "com.waymark.lifeos.dev",
           cloudRestoreConfigured: false,
           now: 1_000,
         });
@@ -539,10 +543,16 @@ const tests: TestCase[] = [
         assert.equal(result.metadata.restoreState, "fresh_local");
         assert.equal(result.protectionStatus, "local_only");
 
-        const metadataRows = await harness.db.getAllAsync<{ db_instance_id: string; vault_id: string; device_id: string }>(
-          "SELECT db_instance_id, vault_id, device_id FROM app_db_metadata;",
+        const metadataRows = await harness.db.getAllAsync<{ db_instance_id: string; vault_id: string; device_id: string; application_id: string }>(
+          "SELECT db_instance_id, vault_id, device_id, application_id FROM app_db_metadata;",
         );
         assert.equal(metadataRows.length, 1);
+        assert.equal(metadataRows[0]?.application_id, "com.waymark.lifeos.dev");
+        const device = await harness.db.getFirstAsync<{ application_id: string }>(
+          "SELECT application_id FROM devices WHERE id = ?;",
+          metadataRows[0]!.device_id,
+        );
+        assert.equal(device?.application_id, "com.waymark.lifeos.dev");
 
         const syncState = await harness.db.getFirstAsync<{ protection_status: string; sync_mode: string }>(
           "SELECT protection_status, sync_mode FROM sync_state WHERE vault_id = ? AND device_id = ?;",
@@ -585,6 +595,7 @@ const tests: TestCase[] = [
         assert.equal(boot.restoreCompleted, true);
         assert.equal(boot.metadata.restoreState, "restored_from_cloud");
         assert.equal(boot.metadata.clientType, "lite");
+        assert.equal(boot.metadata.applicationId, "com.waymark.lifeos.lite");
       } finally {
         harness.close();
       }
@@ -3043,6 +3054,40 @@ const tests: TestCase[] = [
         const replacementDeps = await harness.repos.dependencies.listDependenciesForMark(result.replacement.id);
         assert.equal(replacementDeps.length, 1);
         assert.equal(replacementDeps[0]?.requiredEntityId, required.id);
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "MarkEngine reschedule allows moving a future Mark to an earlier open TrailDay",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const engine = createMarkEngine(harness.repos);
+        const original = await createMark(harness, {
+          localDate: "2026-05-26",
+          status: MarkInstanceStatus.Ready,
+          title: "Pull forward mark",
+        });
+
+        const result = await engine.rescheduleMarkInstance({
+          markInstanceId: original.id,
+          targetLocalDate: "2026-05-25",
+          scheduledStartAt: "2026-05-25T09:00:00.000",
+          scheduledEndAt: "2026-05-25T10:30:00.000",
+        });
+
+        assert.equal(result.original.status, MarkInstanceStatus.Rescheduled);
+        assert.equal(result.original.rescheduledToMarkId, result.replacement.id);
+        assert.notEqual(result.original.trailDayId, result.replacement.trailDayId);
+        assert.equal(result.replacement.status, MarkInstanceStatus.Ready);
+        assert.equal(result.replacement.scheduledStartAt, "2026-05-25T09:00:00.000");
+        assert.equal(result.replacement.scheduledEndAt, "2026-05-25T10:30:00.000");
+        assert.deepEqual(
+          (await harness.repos.marks.listMarkInstancesByDate(original.userId, "2026-05-25")).map((mark) => mark.id),
+          [result.replacement.id],
+        );
       } finally {
         harness.close();
       }
@@ -6854,12 +6899,185 @@ const tests: TestCase[] = [
         assert.equal(dayAMark?.interactionKind, "strength_session");
         assert.equal(dayAMark?.actionSheet?.primaryActionLabel?.en, "Start Workout");
 
-        await services.strengthSessionEngine.startWorkoutSession({ markInstanceId: dayAMark!.id });
+        const startedSession = await services.strengthSessionEngine.startWorkoutSession({ markInstanceId: dayAMark!.id });
+
+        // Once execution has started, the session is the authoritative routine
+        // binding even if a later Turso/planning snapshot leaves the Mark unable
+        // to resolve by template or title.
+        await harness.repos.marks.updateMarkInstance(dayAMark!.id, {
+          templateId: null,
+          title: "Legacy workout title with no catalog match",
+        });
+        const resumedSession = await services.strengthSessionEngine.startWorkoutSession({ markInstanceId: dayAMark!.id });
+        assert.equal(resumedSession.id, startedSession.id);
+        assert.equal(resumedSession.routineTemplateId, startedSession.routineTemplateId);
 
         const resumedToday = await loadTodayData(services, "en", { now: todayNow });
         const resumedDayAMark = resumedToday.marks.find((mark) => mark.id === dayAMark!.id);
         assert.ok(resumedDayAMark);
         assert.equal(resumedDayAMark?.actionSheet?.primaryActionLabel?.en, "Resume Workout");
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Today substituted workout and golf marks do not expose stale session launch actions",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        await harness.repos.userProfiles.getOrCreateLocalUserProfile({
+          userId: "user_1",
+          locale: "en-US",
+          timezone: "UTC",
+          weekStartsOn: 1,
+        });
+        await bootstrapFullConfig(harness);
+        const user = await harness.repos.userProfiles.getUserProfileById("user_1");
+        const healthPath = await getPathByTitle(harness, "user_1", "Health & Body");
+        const golfPath = await getPathByTitle(harness, "user_1", "Golf Craft");
+        assert.ok(user);
+        assert.ok(healthPath);
+        assert.ok(golfPath);
+
+        const markEngine = createMarkEngine(harness.repos);
+        const dailyPlanEngine = createDailyPlanEngine(harness.repos);
+        const services = {
+          repositories: harness.repos,
+          user: user!,
+          markEngine,
+          dailyPlanEngine,
+          packCheckEngine: createPackCheckEngine(harness.repos),
+          dependencyEngine: createDefaultDependencyEngine(harness.repos),
+          signalEngine: createSignalEngine(harness.repos),
+          closeTrailEngine: createCloseTrailEngine(harness.repos),
+          strengthProgressionService: createStrengthProgressionService(harness.repos),
+          strengthSessionEngine: createStrengthSessionEngine(harness.repos),
+        };
+
+        const trailDay = await harness.repos.trailDays.getOrCreateTrailDay("user_1", "2026-06-08");
+        const workoutMark = await harness.repos.marks.createMarkInstance({
+          userId: "user_1",
+          pathId: healthPath!.id,
+          trailDayId: trailDay.id,
+          title: "Workout Day A",
+          origin: MarkInstanceOrigin.ManualPlan,
+          status: MarkInstanceStatus.Ready,
+          proofMediaAssetIds: [],
+        });
+        await setMarkMetadata(harness.repos.appSettings, "user_1", {
+          markId: workoutMark.id,
+          appearsInToday: true,
+          blockType: "workout_block",
+        });
+        const golfMark = await harness.repos.marks.createMarkInstance({
+          userId: "user_1",
+          pathId: golfPath!.id,
+          trailDayId: trailDay.id,
+          title: "Chipping 3 m",
+          origin: MarkInstanceOrigin.ManualPlan,
+          status: MarkInstanceStatus.Ready,
+          proofMediaAssetIds: [],
+        });
+
+        await dailyPlanEngine.beginReplan("user_1", "2026-06-08", "UTC", "2026-06-08T08:55:00.000Z");
+        const workoutResult = await markEngine.substituteMarkInstance({
+          markInstanceId: workoutMark.id,
+          substituteTitle: "Recovery walk proof",
+          substituteMode: { mode: "ready" },
+        });
+        const golfResult = await markEngine.substituteMarkInstance({
+          markInstanceId: golfMark.id,
+          substituteTitle: "Chipping 5 m",
+          substituteMode: { mode: "ready" },
+        });
+
+        assert.equal(
+          (await getMarkMetadata(harness.repos.appSettings, "user_1", workoutResult.substitute.id))?.blockType,
+          undefined,
+        );
+
+        const today = await loadTodayData(services, "en", { now: new Date("2026-06-08T09:00:00.000Z") });
+        const substitutedWorkout = today.marks.find((mark) => mark.id === workoutMark.id);
+        const substitutedGolf = today.marks.find((mark) => mark.id === golfMark.id);
+
+        const visibleMarkSummary = JSON.stringify(today.marks.map((mark) => ({ id: mark.id, title: mark.title.en })));
+        assert.ok(substitutedWorkout, `Substituted workout missing from Today: ${visibleMarkSummary}`);
+        assert.ok(substitutedGolf, `Substituted golf mark missing from Today: ${visibleMarkSummary}`);
+        assert.equal(substitutedWorkout?.interactionKind, "default");
+        assert.equal(substitutedWorkout?.actionSheet?.primaryActionLabel, undefined);
+        assert.equal(substitutedWorkout?.actionSheet?.launchConfig, undefined);
+        assert.equal(substitutedGolf?.interactionKind, "default");
+        assert.equal(substitutedGolf?.actionSheet?.primaryActionLabel, undefined);
+        assert.equal(substitutedGolf?.actionSheet?.launchConfig, undefined);
+      } finally {
+        harness.close();
+      }
+    },
+  },
+  {
+    name: "Today recognizes a weekly workout from mark metadata when template seed metadata is unavailable",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        await harness.repos.userProfiles.getOrCreateLocalUserProfile({
+          userId: "user_1",
+          locale: "en-US",
+          timezone: "UTC",
+          weekStartsOn: 1,
+        });
+        await bootstrapFullConfig(harness);
+        const user = await harness.repos.userProfiles.getUserProfileById("user_1");
+        const healthPath = await getPathByTitle(harness, "user_1", "Health & Body");
+        assert.ok(user);
+        assert.ok(healthPath);
+
+        const template = await harness.repos.marks.createMarkTemplate({
+          userId: "user_1",
+          pathId: healthPath!.id,
+          title: "Remote Workout Minimal",
+          templateType: MarkTemplateType.Routine,
+          recurrenceRule: { kind: RecurrenceKind.Manual },
+        });
+        const routine = (await harness.repos.strength.listRoutinesByPath(healthPath!.id))
+          .find((item) => item.title === "Home Workout");
+        assert.ok(routine);
+        assert.notEqual(routine!.markTemplateId, template.id);
+        const importReport = await importWeeklyTimetable(harness.repos, {
+          userId: "user_1",
+          weekStartDate: "2026-08-10",
+          weekEndDate: "2026-08-16",
+          importBatchId: "weekly_workout_mark_metadata_regression",
+          items: [
+            {
+              localDate: "2026-08-10",
+              startTime: "05:20",
+              endTime: "06:15",
+              title: "Workout Minimal",
+              pathId: healthPath!.id,
+              templateRef: template.title,
+              blockKey: "workout",
+            },
+          ],
+        });
+        const mark = importReport.results[0]?.mark;
+        assert.ok(mark);
+        assert.equal((await getMarkMetadata(harness.repos.appSettings, "user_1", mark!.id))?.blockType, "workout_block");
+        assert.equal(await getMarkTemplateSeedMetadata(harness.repos.appSettings, "user_1", template.id), null);
+
+        const services = {
+          ...createShellAdapter(harness, user!),
+          closeTrailEngine: createCloseTrailEngine(harness.repos),
+          strengthProgressionService: createStrengthProgressionService(harness.repos),
+          strengthSessionEngine: createStrengthSessionEngine(harness.repos),
+        };
+        const today = await loadTodayData(services, "en", { now: new Date("2026-08-10T09:00:00.000Z") });
+        const workoutMark = today.marks.find((item) => item.id === mark!.id);
+
+        assert.equal(workoutMark?.interactionKind, "strength_session");
+        assert.equal(workoutMark?.actionSheet?.primaryActionLabel?.en, "Start Workout");
+        assert.equal(workoutMark?.actionSheet?.launchConfig?.kind, "health_workout");
+        assert.equal(workoutMark?.actionSheet?.launchConfig?.defaultOptionId, routine!.id);
       } finally {
         harness.close();
       }
@@ -7337,7 +7555,7 @@ const tests: TestCase[] = [
         const homeWorkoutMarks = await harness.repos.marks.listMarkInstancesByDate("user_1", "2026-08-12");
         const healthPath = await getPathByTitle(harness, "user_1", "Health & Body");
         assert.ok(healthPath);
-        const homeWorkoutMark = homeWorkoutMarks.find((mark) => mark.pathId === healthPath!.id && mark.title === "Home Workout");
+        const homeWorkoutMark = homeWorkoutMarks.find((mark) => mark.pathId === healthPath!.id && mark.title === "Body weight rep progress");
         assert.ok(homeWorkoutMark);
 
         await sessionEngine.startWorkoutSession({ markInstanceId: homeWorkoutMark!.id });
@@ -7456,7 +7674,7 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "Workout Minimal weekly review repairs the legacy four-exercise routine before rendering",
+    name: "Workout Minimal weekly review reads the Turso routine without repairing catalog",
     run: async () => {
       const harness = await createHarness();
       try {
@@ -7527,18 +7745,12 @@ const tests: TestCase[] = [
         };
         const review = await loadWorkoutReviewData(services, mark.id, "en", bodyweightRoutine!.id);
         assert.ok(review);
-        assert.equal(review?.routineTitle, "Home Workout");
+        assert.equal(review?.routineTitle, "Body weight rep progress");
         assert.deepEqual(
-          review?.exercises.filter((exercise) => exercise.phase === "main").map((exercise) => [exercise.title, exercise.prescription]),
-          [
-            ["Push-up", "1 x 10"],
-            ["Side Plank Rotation — Left", "1 x 5"],
-            ["Side Plank Rotation — Right", "1 x 5"],
-            ["Plank", "1 x 50 sec"],
-            ["Burpee", "1 x 10"],
-            ["Inverted Row", "1 x 12"],
-          ],
+          review?.exercises.filter((exercise) => exercise.phase === "main").map((exercise) => exercise.title),
+          ["Push-up", "Burpee", "Inverted Row", "Plank"],
         );
+        assert.equal((await harness.repos.strength.getRoutineById(bodyweightRoutine!.id))?.title, "Body weight rep progress");
         assert.equal(await harness.repos.strength.getSessionByMarkInstance(mark.id), null);
         assert.equal((await harness.repos.marks.getMarkInstanceById(mark.id))?.status, MarkInstanceStatus.Planned);
       } finally {
@@ -7687,6 +7899,10 @@ const tests: TestCase[] = [
         const bodyweightRoutine = (await harness.repos.strength.listRoutinesByPath(healthPath!.id))
           .find((routine) => routine.title === "Home Workout");
         assert.ok(bodyweightRoutine?.markTemplateId);
+        assert.equal(
+          (await harness.repos.marks.getMarkTemplateById(bodyweightRoutine!.markTemplateId!))?.title,
+          "Body weight rep progress",
+        );
         const workoutMark = await createMark(harness, {
           localDate: "2026-08-10",
           pathId: healthPath!.id,

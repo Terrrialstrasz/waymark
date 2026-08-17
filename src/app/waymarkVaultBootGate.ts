@@ -11,6 +11,7 @@ export type AppDbMetadata = {
   vaultId: string;
   deviceId: string;
   clientType: WaymarkClientType;
+  applicationId: string;
   schemaVersion: number;
   mapVersion: number;
   seedVersion: number;
@@ -26,6 +27,7 @@ type AppDbMetadataRow = {
   vault_id: string;
   device_id: string;
   client_type: WaymarkClientType;
+  application_id: string | null;
   schema_version: number;
   map_version: number;
   seed_version: number;
@@ -42,6 +44,7 @@ export type RestoreWaymarkVaultResult = {
 
 export type WaymarkVaultBootGateOptions = {
   clientType?: WaymarkClientType;
+  applicationId?: string;
   deviceName?: string;
   mapVersion: number;
   seedVersion: number;
@@ -98,6 +101,7 @@ export async function runWaymarkVaultBootGateAsync(
   const now = options.now ?? Date.now();
   const schemaVersion = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
   const clientType = options.clientType ?? getConfiguredClientType();
+  const applicationId = options.applicationId ?? getConfiguredApplicationId(clientType);
   const cloudRestoreConfigured = options.cloudRestoreConfigured ?? isCloudRestoreConfigured();
   const configuredVaultId = getConfiguredVaultId();
   const configuredDeviceId = getConfiguredDeviceId();
@@ -109,6 +113,7 @@ export async function runWaymarkVaultBootGateAsync(
         vaultId,
         deviceId: existing.deviceId,
         clientType,
+        applicationId,
         deviceName: options.deviceName ?? clientType,
         now,
       });
@@ -125,6 +130,7 @@ export async function runWaymarkVaultBootGateAsync(
     }
     await touchExistingMetadataAsync(db, existing, {
       clientType,
+      applicationId,
       schemaVersion,
       mapVersion: options.mapVersion,
       seedVersion: options.seedVersion,
@@ -151,6 +157,7 @@ export async function runWaymarkVaultBootGateAsync(
     vaultId,
     deviceId,
     clientType,
+    applicationId,
     deviceName: options.deviceName ?? clientType,
     now,
   });
@@ -176,6 +183,7 @@ export async function runWaymarkVaultBootGateAsync(
       vault_id,
       device_id,
       client_type,
+      application_id,
       schema_version,
       map_version,
       seed_version,
@@ -184,11 +192,12 @@ export async function runWaymarkVaultBootGateAsync(
       last_migration_at,
       last_seed_at,
       last_cloud_sync_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL);`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL);`,
     dbInstanceId,
     vaultId,
     deviceId,
     clientType,
+    applicationId,
     schemaVersion,
     options.mapVersion,
     options.seedVersion,
@@ -250,6 +259,7 @@ async function touchExistingMetadataAsync(
   current: AppDbMetadata,
   input: {
     clientType: WaymarkClientType;
+    applicationId: string;
     schemaVersion: number;
     mapVersion: number;
     seedVersion: number;
@@ -258,16 +268,22 @@ async function touchExistingMetadataAsync(
 ): Promise<void> {
   await db.runAsync(
     `UPDATE app_db_metadata
-     SET client_type = ?, schema_version = ?, map_version = ?, seed_version = ?, last_migration_at = ?
+     SET client_type = ?, application_id = ?, schema_version = ?, map_version = ?, seed_version = ?, last_migration_at = ?
      WHERE db_instance_id = ?;`,
     input.clientType,
+    input.applicationId,
     input.schemaVersion,
     input.mapVersion,
     input.seedVersion,
     input.now,
     current.dbInstanceId,
   );
-  await db.runAsync("UPDATE devices SET last_seen_at = ? WHERE id = ?;", input.now, current.deviceId);
+  await db.runAsync(
+    "UPDATE devices SET application_id = ?, last_seen_at = ? WHERE id = ?;",
+    input.applicationId,
+    input.now,
+    current.deviceId,
+  );
 }
 
 async function rehomeExistingMetadataAsync(
@@ -304,6 +320,7 @@ async function ensureVaultAndDeviceRowsAsync(
     vaultId: string;
     deviceId: string;
     clientType: WaymarkClientType;
+    applicationId: string;
     deviceName: string;
     now: number;
   },
@@ -318,16 +335,18 @@ async function ensureVaultAndDeviceRowsAsync(
     input.now,
   );
   await db.runAsync(
-    `INSERT INTO devices (id, vault_id, client_type, device_name, created_at, last_seen_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO devices (id, vault_id, client_type, application_id, device_name, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        vault_id = excluded.vault_id,
        client_type = excluded.client_type,
+       application_id = excluded.application_id,
        device_name = excluded.device_name,
        last_seen_at = excluded.last_seen_at;`,
     input.deviceId,
     input.vaultId,
     input.clientType,
+    input.applicationId,
     input.deviceName,
     input.now,
     input.now,
@@ -368,6 +387,7 @@ function fromMetadataRow(row: AppDbMetadataRow): AppDbMetadata {
     vaultId: row.vault_id,
     deviceId: row.device_id,
     clientType: row.client_type,
+    applicationId: row.application_id ?? getConfiguredApplicationId(),
     schemaVersion: row.schema_version,
     mapVersion: row.map_version,
     seedVersion: row.seed_version,
@@ -381,6 +401,17 @@ function fromMetadataRow(row: AppDbMetadataRow): AppDbMetadata {
 
 function getConfiguredClientType(): WaymarkClientType {
   return getEnvValue("WAYMARK_CLIENT_TYPE") === "lite" ? "lite" : "main";
+}
+
+export function getConfiguredApplicationId(clientType = getConfiguredClientType()): string {
+  const explicit = getEnvValue("EXPO_PUBLIC_WAYMARK_APPLICATION_ID") ?? getEnvValue("WAYMARK_APPLICATION_ID");
+  if (explicit) return explicit;
+  if (clientType === "lite") return "com.waymark.lifeos.lite";
+  const variant = getEnvValue("EXPO_PUBLIC_WAYMARK_APP_VARIANT");
+  if (variant === "dev" || (variant == null && typeof __DEV__ !== "undefined" && __DEV__)) {
+    return "com.waymark.lifeos.dev";
+  }
+  return "com.waymark.lifeos";
 }
 
 function getConfiguredVaultId(): string {

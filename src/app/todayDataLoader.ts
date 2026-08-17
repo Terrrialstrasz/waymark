@@ -38,6 +38,7 @@ import type { WaymarkAppServices } from "./WaymarkAppProvider";
 import { getPackCheckSurfacePolicy } from "../lib/waymark/packCheckSurfacePolicyStore";
 import { PACK_CHECK_CATALOG, getPackCheckCatalogEntryBySourceSeedId, getPackCheckCatalogEntryByTitle, type PackCheckCatalogEntry } from "../config/packCheckCatalog";
 import { ensureMarkExecutionChecklist } from "../lib/waymark/markExecutionChecklistStore";
+import { getMarkMetadata } from "../lib/waymark/markMetadataStore";
 import { getMarkTemplateSeedMetadata } from "../lib/waymark/markTemplateSeedStore";
 import { getSeedRecord } from "../waymark-map/seedRegistry";
 import { resolveGolfPracticeWorkoutTypeForMarkTitle } from "../lib/waymark/golfPracticeMark";
@@ -45,6 +46,8 @@ import { extractPackCheckReferenceLabels, sanitizeUserFacingMarkDetail } from ".
 import { getCurrentRuntimeLocalDate, materializeRuntimeForDate } from "./runtimeLifecycle";
 import { getWeekStartDate } from "./waymarkUi";
 import { createDailyPlanEngine } from "../lib/waymark/dailyPlanEngine";
+import { resolveRoutineBinding } from "../lib/waymark/routineBindingResolver";
+import { recordProductionDiagnostic } from "./productionDiagnostics";
 
 export type TodayData = {
   trailDayId: string;
@@ -95,6 +98,13 @@ const TODAY_FEATURE_FLAGS: TodayCockpitFeatureFlags = {
 
 export function reportTodayLoadIssue(stage: string, error: unknown) {
   console.error(`[WaymarkToday] ${stage}`, error);
+  void recordProductionDiagnostic({
+    category: stage.includes("routine") ? "routine_binding" : "ui_action",
+    name: "today_load_issue",
+    severity: "error",
+    context: { stage },
+    error,
+  });
 }
 
 async function timeTodayLoadStep<T>(label: string, run: () => Promise<T>): Promise<T> {
@@ -242,7 +252,7 @@ export async function loadTodayData(
   const markDependencies = new Map<string, TodayMarkActionSheetDependency[]>();
   const relatedPackChecksByMarkId = new Map<string, TodayMarkActionSheetPackLink[]>();
   const embeddedChecklistsByMarkId = new Map<string, NonNullable<TodayMarkActionSheetConfig["embeddedChecklist"]>>();
-  const templateMetadataByMarkId = new Map<string, Awaited<ReturnType<typeof getMarkTemplateSeedMetadata>> | null>();
+  const workoutMarkById = new Map<string, boolean>();
   const workoutPrimaryActionByMarkId = new Map<string, Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint" | "launchConfig"> | null>();
   const markDetailByMarkId = new Map<string, MarkInstanceDetail | null>();
   await timeTodayLoadStep("markDetails", async () => {
@@ -252,8 +262,12 @@ export async function loadTodayData(
         const templateMetadata = mark.templateId
           ? await getMarkTemplateSeedMetadata(app.repositories.appSettings, app.user.id, mark.templateId)
           : null;
-        templateMetadataByMarkId.set(mark.id, templateMetadata);
-        workoutPrimaryActionByMarkId.set(mark.id, await buildWorkoutPrimaryActionConfig(app, mark, templateMetadata));
+        const markMetadata = await getMarkMetadata(app.repositories.appSettings, app.user.id, mark.id);
+        const isWorkoutMark =
+          mark.status !== MarkInstanceStatus.Substituted &&
+          (markMetadata?.blockType === "workout_block" || templateMetadata?.blockType === "workout_block");
+        workoutMarkById.set(mark.id, isWorkoutMark);
+        workoutPrimaryActionByMarkId.set(mark.id, await buildWorkoutPrimaryActionConfig(app, mark, isWorkoutMark));
         markDependencies.set(mark.id, await buildBlockingDependencies(app, mark, locale));
         relatedPackChecksByMarkId.set(mark.id, await buildRelatedPackChecks(app, mark, locale));
         const embeddedChecklist = await buildEmbeddedChecklist(app, mark);
@@ -262,7 +276,7 @@ export async function loadTodayData(
         }
       } catch (error) {
         reportTodayLoadIssue(`mark detail ${mark.id}`, error);
-        templateMetadataByMarkId.set(mark.id, null);
+        workoutMarkById.set(mark.id, false);
         workoutPrimaryActionByMarkId.set(mark.id, null);
         markDependencies.set(mark.id, []);
         relatedPackChecksByMarkId.set(mark.id, []);
@@ -282,7 +296,7 @@ export async function loadTodayData(
         relatedPackChecksByMarkId.get(mark.id) ?? [],
         signalsByMarkId.get(mark.id),
         embeddedChecklistsByMarkId.get(mark.id),
-        templateMetadataByMarkId.get(mark.id) ?? null,
+        workoutMarkById.get(mark.id) ?? false,
         workoutPrimaryActionByMarkId.get(mark.id) ?? null,
         markDetailByMarkId.get(mark.id) ?? null,
       ),
@@ -587,7 +601,7 @@ function mapMarkToTodayItem(
   relatedPackChecks: TodayMarkActionSheetPackLink[],
   signal: Signal | undefined,
   embeddedChecklist: TodayMarkActionSheetConfig["embeddedChecklist"] | undefined,
-  templateMetadata: Awaited<ReturnType<typeof getMarkTemplateSeedMetadata>> | null,
+  isWorkoutMark: boolean,
   workoutPrimaryAction: Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint" | "launchConfig"> | null,
   markDetail: MarkInstanceDetail | null,
 ): TodayMarkItem | null {
@@ -600,16 +614,14 @@ function mapMarkToTodayItem(
   const statusLabel = mark.status === MarkInstanceStatus.PartiallyCompleted
     ? { en: "Partial Complete", vi: "Hoàn thành một phần" }
     : { en: humanizeTodayMarkStatus(status, "en"), vi: humanizeTodayMarkStatus(status, "vi") };
-  const isWorkoutMark = templateMetadata?.blockType === "workout_block";
-  const golfPracticeWorkoutType = pathId === "golf" ? resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) : null;
+  const golfPracticeWorkoutType =
+    mark.status !== MarkInstanceStatus.Substituted &&
+    pathId === "golf"
+      ? resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title)
+      : null;
   const isGolfPracticeMark = Boolean(golfPracticeWorkoutType);
-  const primaryAction = isGolfPracticeMark
-    ? {
-        primaryActionLabel: { en: "Start Practice", vi: "Bắt đầu luyện tập" },
-        primaryActionHint: { en: "Enter the Golf Practice flow for this planned mark.", vi: "Vào flow Golf Practice cho planned mark này." },
-      }
-    : workoutPrimaryAction;
-  const launchConfig = isGolfPracticeMark ? workoutPrimaryAction?.launchConfig : primaryAction?.launchConfig;
+  const primaryAction = workoutPrimaryAction;
+  const launchConfig = primaryAction?.launchConfig;
   const primerText = sanitizeUserFacingMarkDetail(markDetail?.primerSnapshot ?? mark.description);
   const markNote = sanitizeUserFacingMarkDetail(markDetail?.preActionComment);
   const visibleRelatedPackChecks = relatedPackChecks.filter(
@@ -665,9 +677,30 @@ function mapMarkToTodayItem(
 async function buildWorkoutPrimaryActionConfig(
   app: WaymarkAppServices,
   mark: MarkInstance,
-  templateMetadata: Awaited<ReturnType<typeof getMarkTemplateSeedMetadata>> | null,
+  isWorkoutMark: boolean,
 ): Promise<Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint" | "launchConfig"> | null> {
+  if (mark.status === MarkInstanceStatus.Substituted) {
+    return null;
+  }
+
   if (resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title)) {
+    const session = await app.repositories.strength.getSessionByMarkInstance(mark.id);
+    if (
+      session?.status === WorkoutSessionStatus.Completed ||
+      session?.status === WorkoutSessionStatus.PartiallyCompleted ||
+      session?.status === WorkoutSessionStatus.Abandoned
+    ) {
+      return {
+        primaryActionLabel: { en: "View Practice", vi: "Xem buoi luyen tap" },
+        primaryActionHint: { en: "Open the recorded Golf Practice session.", vi: "Mo lai buoi Golf Practice da duoc ghi nhan." },
+      };
+    }
+    if (session && session.status !== WorkoutSessionStatus.NotStarted) {
+      return {
+        primaryActionLabel: { en: "Resume Practice", vi: "Tiep tuc luyen tap" },
+        primaryActionHint: { en: "Resume the Golf Practice session already in progress.", vi: "Tiep tuc buoi Golf Practice dang do." },
+      };
+    }
     const launchConfig = await buildGolfPracticeLaunchConfig(app, mark);
     if (launchConfig) {
       return {
@@ -678,13 +711,16 @@ async function buildWorkoutPrimaryActionConfig(
     }
   }
 
-  if (templateMetadata?.blockType !== "workout_block") {
+  if (!isWorkoutMark) {
     return null;
   }
 
   const session = await app.repositories.strength.getSessionByMarkInstance(mark.id);
-  if (!session || session.status === WorkoutSessionStatus.NotStarted || session.status === WorkoutSessionStatus.Abandoned) {
+  if (!session || session.status === WorkoutSessionStatus.NotStarted) {
     const launchConfig = await buildHealthWorkoutLaunchConfig(app, mark);
+    if (!launchConfig) {
+      return null;
+    }
     return {
       launchConfig,
       primaryActionLabel: { en: "Start Workout", vi: "Bắt đầu buổi tập" },
@@ -692,7 +728,11 @@ async function buildWorkoutPrimaryActionConfig(
     };
   }
 
-  if (session.status === WorkoutSessionStatus.Completed || session.status === WorkoutSessionStatus.PartiallyCompleted) {
+  if (
+    session.status === WorkoutSessionStatus.Completed ||
+    session.status === WorkoutSessionStatus.PartiallyCompleted ||
+    session.status === WorkoutSessionStatus.Abandoned
+  ) {
     return {
       primaryActionLabel: { en: "View Session", vi: "Xem buổi tập" },
       primaryActionHint: { en: "Open the recorded workout session.", vi: "Mở lại buổi tập đã được ghi nhận." },
@@ -716,14 +756,13 @@ export async function buildHealthWorkoutLaunchConfig(
     return undefined;
   }
 
-  const defaultRoutine =
-    (mark.templateId ? routines.find((routine) => routine.markTemplateId === mark.templateId) : undefined) ??
-    routines.find((routine) => normalizeLaunchText(routine.title) === normalizeLaunchText(mark.title)) ??
-    routines.find((routine) => isWorkoutMinimalBodyweightRoutine(mark.title, routine)) ??
-    routines.find((routine) => normalizeLaunchText(mark.title).includes("walk") && routine.routineType === WorkoutRoutineType.Walk) ??
-    routines.find((routine) => normalizeLaunchText(mark.title).includes("day b") && normalizeLaunchText(routine.title).includes("day b")) ??
-    routines.find((routine) => normalizeLaunchText(routine.title).includes("day a")) ??
-    routines[0]!;
+  let defaultRoutine: WorkoutRoutineTemplate;
+  try {
+    defaultRoutine = (await resolveRoutineBinding(app.repositories, mark, "strength")).routine;
+  } catch (error) {
+    reportTodayLoadIssue(`resolve strength routine for Mark ${mark.id}`, error);
+    return undefined;
+  }
   const orderedRoutines = putDefaultRoutineFirst(routines, defaultRoutine.id);
 
   return {
@@ -750,14 +789,13 @@ export async function buildGolfPracticeLaunchConfig(
     return undefined;
   }
 
-  const defaultType = resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) ?? "putting";
-  const defaultRoutine =
-    (mark.templateId ? routines.find((routine) => routine.markTemplateId === mark.templateId) : undefined) ??
-    routines.find((routine) => normalizeLaunchText(routine.title) === normalizeLaunchText(mark.title)) ??
-    routines.find((routine) => isMatchingGolfPracticeRoutine(mark.title, routine.title)) ??
-    (defaultType === "swing" ? routines.find((routine) => normalizeLaunchText(routine.title).includes("swing")) : undefined) ??
-    routines.find((routine) => normalizeLaunchText(routine.title).includes("putting 23 putts")) ??
-    routines[0]!;
+  let defaultRoutine: WorkoutRoutineTemplate;
+  try {
+    defaultRoutine = (await resolveRoutineBinding(app.repositories, mark, "golf_practice")).routine;
+  } catch (error) {
+    reportTodayLoadIssue(`resolve Golf Practice routine for Mark ${mark.id}`, error);
+    return undefined;
+  }
   const orderedRoutines = putDefaultRoutineFirst(routines, defaultRoutine.id);
 
   return {
@@ -773,19 +811,6 @@ export async function buildGolfPracticeLaunchConfig(
   };
 }
 
-function normalizeLaunchText(value: string) {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function isWorkoutMinimalBodyweightRoutine(markTitle: string, routine: WorkoutRoutineTemplate) {
-  const normalizedMarkTitle = normalizeLaunchText(markTitle);
-  if (!normalizedMarkTitle.includes("workout minimal")) {
-    return false;
-  }
-  const normalizedRoutineTitle = normalizeLaunchText(routine.title);
-  return normalizedRoutineTitle.includes("body weight rep progress") || normalizedRoutineTitle.includes("bodyweight rep progress");
-}
-
 function putDefaultRoutineFirst(routines: WorkoutRoutineTemplate[], defaultRoutineId: string) {
   return [...routines].sort((left, right) => {
     if (left.id === defaultRoutineId) {
@@ -796,30 +821,6 @@ function putDefaultRoutineFirst(routines: WorkoutRoutineTemplate[], defaultRouti
     }
     return left.title.localeCompare(right.title);
   });
-}
-
-function isMatchingGolfPracticeRoutine(markTitle: string, routineTitle: string) {
-  const normalizedMarkTitle = normalizeGolfLaunchText(markTitle);
-  const normalizedRoutineTitle = normalizeGolfLaunchText(routineTitle);
-  if (normalizedMarkTitle.includes("putt")) {
-    return normalizedRoutineTitle.includes("putting 23 putts");
-  }
-  if (!normalizedMarkTitle.includes("chipping")) {
-    return false;
-  }
-  if (normalizedMarkTitle.includes("3 5 7")) {
-    return normalizedRoutineTitle.includes("chipping 3 5 7");
-  }
-  const distance = normalizedMarkTitle.match(/chipping ([357]) m/)?.[1];
-  return Boolean(distance && normalizedRoutineTitle.includes(`chipping ${distance} m`));
-}
-
-function normalizeGolfLaunchText(value: string) {
-  return normalizeLaunchText(value)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
 }
 
 function mapPackCheckItemInstance(item: PackCheckItemInstance): PackCheckItem {

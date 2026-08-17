@@ -28,10 +28,17 @@ import {
   WaymarkRepositories,
 } from "../../domain/waymark";
 import { type DailyMarkAssignment, getDailyMarkAssignmentForTemplateDate } from "./dailyMarkPlanStore";
-import { copyMarkExecutionPresentationMetadata, getMarkMetadata, setMarkMetadata } from "./markMetadataStore";
+import {
+  copyMarkExecutionPresentationMetadata,
+  copyMarkSubstitutionPresentationMetadata,
+  getMarkMetadata,
+  setMarkMetadata,
+} from "./markMetadataStore";
 import { getMarkTemplateSeedMetadata } from "./markTemplateSeedStore";
 import { getSignalBehavior, setSignalBehavior } from "./signalBehaviorStore";
 import { recomputeEffectiveTrailDayExecutionCounters } from "./plannedMarkSourceOfTruth";
+import { includeIncomingDailyReplanRoot } from "./dailyReplanStateStore";
+import { collectCandidateRootMarkIds, tracePlannedMarkRoot } from "./plannedMarkLineage";
 import { buildZonedDateTime } from "../../app/waymarkUi";
 
 const MARK_STATUS_DISPLAY_LABELS: Record<MarkInstanceStatus, string> = {
@@ -422,8 +429,8 @@ export class DefaultMarkEngine implements MarkEngine {
       if (!sourceTrailDay) {
         throw new MarkEngineValidationError(`Source TrailDay ${original.trailDayId} does not exist.`);
       }
-      if (targetTrailDay.date <= sourceTrailDay.date) {
-        throw new MarkEngineValidationError("A moved Mark must target a future TrailDay.");
+      if (targetTrailDay.date === sourceTrailDay.date) {
+        throw new MarkEngineValidationError("A moved Mark must target a different TrailDay.");
       }
 
       const replacement = await repos.marks.createMarkInstance({
@@ -471,6 +478,17 @@ export class DefaultMarkEngine implements MarkEngine {
 
       await this.transferSignalsToReplacement(repos, updatedOriginal, readyReplacement, targetTrailDay.date);
       await this.settleDependenciesForResolvedMark(repos, updatedOriginal, nowIso());
+      const replacementLineage = await tracePlannedMarkRoot(repos, readyReplacement);
+      const targetCandidateRoots = await collectCandidateRootMarkIds(repos, original.userId, targetTrailDay.date);
+      if (targetCandidateRoots.includes(replacementLineage.root.id)) {
+        await includeIncomingDailyReplanRoot(
+          repos.appSettings,
+          original.userId,
+          targetTrailDay.date,
+          replacementLineage.root.id,
+          nowIso(),
+        );
+      }
       await recomputeEffectiveTrailDayExecutionCounters(repos, original.userId, sourceTrailDay.date);
       await recomputeEffectiveTrailDayExecutionCounters(repos, original.userId, targetTrailDay.date);
 
@@ -514,6 +532,7 @@ export class DefaultMarkEngine implements MarkEngine {
         userId: original.userId,
         pathId: input.substitutePathId ?? original.pathId,
         trailDayId: substituteTrailDay.id,
+        templateId: input.substituteTemplateId ?? null,
         expeditionId:
           input.substituteExpeditionId === undefined
             ? original.expeditionId ?? null
@@ -557,7 +576,7 @@ export class DefaultMarkEngine implements MarkEngine {
       await setMarkMetadata(
         repos.appSettings,
         original.userId,
-        copyMarkExecutionPresentationMetadata(existingMetadata, finalizedSubstitute.id),
+        copyMarkSubstitutionPresentationMetadata(existingMetadata, finalizedSubstitute.id, input.substituteWorkoutFlow === true),
       );
 
       await this.transferSignalsToReplacement(repos, updatedOriginal, finalizedSubstitute, substituteTrailDay.date);

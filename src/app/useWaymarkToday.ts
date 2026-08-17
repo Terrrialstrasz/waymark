@@ -17,6 +17,7 @@ import type { PackCheckInstance, PackCheckItemInstance, Path, Expedition, MarkDe
 import {
   DependencyStatus,
   ExpeditionStatus,
+  MarkInstanceOrigin,
   MarkInstanceStatus,
   PackCheckInstanceStatus,
   SignalStatus,
@@ -555,8 +556,16 @@ function mapMarkToTodayItem(
   const statusLabel = mark.status === MarkInstanceStatus.PartiallyCompleted
     ? { en: "Partial Complete", vi: "Hoàn thành một phần" }
     : { en: humanizeTodayMarkStatus(status, "en"), vi: humanizeTodayMarkStatus(status, "vi") };
-  const isWorkoutMark = templateMetadata?.blockType === "workout_block";
-  const golfPracticeWorkoutType = pathId === "golf" ? resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title) : null;
+  const isWorkoutMark =
+    mark.origin !== MarkInstanceOrigin.Substitution &&
+    mark.status !== MarkInstanceStatus.Substituted &&
+    templateMetadata?.blockType === "workout_block";
+  const golfPracticeWorkoutType =
+    mark.origin !== MarkInstanceOrigin.Substitution &&
+    mark.status !== MarkInstanceStatus.Substituted &&
+    pathId === "golf"
+      ? resolveGolfPracticeWorkoutTypeForMarkTitle(mark.title)
+      : null;
   const isGolfPracticeMark = Boolean(golfPracticeWorkoutType);
   const primaryAction = isGolfPracticeMark
     ? {
@@ -608,6 +617,13 @@ async function buildWorkoutPrimaryActionConfig(
   mark: MarkInstance,
   templateMetadata: Awaited<ReturnType<typeof getMarkTemplateSeedMetadata>> | null,
 ): Promise<Pick<TodayMarkActionSheetConfig, "primaryActionLabel" | "primaryActionHint"> | null> {
+  if (
+    mark.origin === MarkInstanceOrigin.Substitution ||
+    mark.status === MarkInstanceStatus.Substituted
+  ) {
+    return null;
+  }
+
   if (templateMetadata?.blockType !== "workout_block") {
     return null;
   }

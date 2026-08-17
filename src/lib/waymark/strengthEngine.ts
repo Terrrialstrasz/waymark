@@ -22,7 +22,6 @@ import {
   MarkInstance,
   MarkInstanceStatus,
   OverrideSessionExerciseTargetInput,
-  RecurrenceKind,
   ResetWorkoutSessionInput,
   RoutineExerciseTemplate,
   SessionExerciseSnapshot,
@@ -43,6 +42,7 @@ import {
   WorkoutExercisePhase,
 } from "../../domain/waymark";
 import { createMarkEngine } from "./markEngine";
+import { resolveRoutineBinding, RoutineBindingResolutionError } from "./routineBindingResolver";
 
 const WORKOUT_SESSION_STATUS_DISPLAY_LABELS: Record<WorkoutSessionStatus, string> = {
   [WorkoutSessionStatus.NotStarted]: "Not Started",
@@ -1306,65 +1306,14 @@ export class DefaultStrengthSessionEngine implements StrengthSessionEngine {
   }
 
   private async resolveRoutineForMark(repos: WaymarkRepositories, mark: MarkInstance): Promise<WorkoutRoutineTemplate> {
-    const routines = (await repos.strength.listRoutinesByPath(mark.pathId)).filter((item) => item.isActive);
-    if (routines.length === 0) {
-      throw new StrengthEngineValidationError(`Path ${mark.pathId} does not have an active workout routine.`);
-    }
-
-    if (mark.templateId) {
-      const exact = routines.find((item) => item.markTemplateId === mark.templateId);
-      if (exact) {
-        return exact;
+    try {
+      return (await resolveRoutineBinding(repos, mark, "strength", undefined, { preferExistingSession: false })).routine;
+    } catch (error) {
+      if (error instanceof RoutineBindingResolutionError) {
+        throw new StrengthEngineValidationError(error.message);
       }
-
-      const template = await repos.marks.getMarkTemplateById(mark.templateId);
-      if (template?.recurrenceRule.kind === RecurrenceKind.CustomCycle) {
-        const walkRoutine = routines.find(
-          (item) =>
-            item.routineType === WorkoutRoutineType.Walk &&
-            (!item.cycleKey || item.cycleKey === template.recurrenceRule.customCycleKey),
-        );
-        if (walkRoutine && normalizeText(template.title).includes("walk")) {
-          return walkRoutine;
-        }
-      }
+      throw error;
     }
-
-    const normalizedTitle = normalizeText(mark.title);
-    const dayA1Routine = routines.find((item) => normalizeText(item.title).includes("day a1"));
-    if ((normalizedTitle.includes("day a1") || normalizedTitle.includes("workout a1")) && dayA1Routine) {
-      return dayA1Routine;
-    }
-    const dayA2Routine = routines.find((item) => normalizeText(item.title).includes("day a2"));
-    if ((normalizedTitle.includes("day a2") || normalizedTitle.includes("workout a2")) && dayA2Routine) {
-      return dayA2Routine;
-    }
-    if ((normalizedTitle.includes("day a") || normalizedTitle.includes("workout a")) && dayA1Routine) {
-      return dayA1Routine;
-    }
-    const dayARoutine = routines.find((item) => normalizeText(item.title).includes("day a"));
-    if ((normalizedTitle.includes("day a") || normalizedTitle.includes("workout a")) && dayARoutine) {
-      return dayARoutine;
-    }
-    const dayBRoutine = routines.find((item) => normalizeText(item.title).includes("day b"));
-    if ((normalizedTitle.includes("day b") || normalizedTitle.includes("workout b")) && dayBRoutine) {
-      return dayBRoutine;
-    }
-    const byTitle = routines.find((item) => normalizeText(item.title) === normalizedTitle);
-    if (byTitle) {
-      return byTitle;
-    }
-
-    const walkRoutine = routines.find((item) => normalizeText(item.title).includes("walk"));
-    if (normalizedTitle.includes("walk") && walkRoutine) {
-      return walkRoutine;
-    }
-
-    if (routines.length === 1) {
-      return routines[0]!;
-    }
-
-    throw new StrengthEngineValidationError(`Could not resolve workout routine for Mark ${mark.id}.`);
   }
 
   private async requireSelectableRoutineForMark(
@@ -1398,9 +1347,25 @@ export class DefaultStrengthSessionEngine implements StrengthSessionEngine {
       return session;
     }
 
+    const existingSnapshots = getOrderedSnapshots(await repos.strength.listSessionSnapshots(session.id));
+    const existingLogs = await Promise.all(existingSnapshots.map((snapshot) => repos.strength.listSetLogs(snapshot.id)));
+    const hasSetLogs = existingLogs.some((logs) => logs.length > 0);
+    const hasProgress =
+      Boolean(session.startedAt) ||
+      hasSetLogs ||
+      existingSnapshots.some(
+        (snapshot) =>
+          snapshot.status !== SessionExerciseStatus.NotStarted && snapshot.status !== SessionExerciseStatus.Active,
+      );
+    if (hasProgress) {
+      if (selectedRoutine && selectedRoutine.id !== session.routineTemplateId) {
+        throw new StrengthEngineValidationError(`Workout session ${session.id} has already started with a different routine.`);
+      }
+      return session;
+    }
+
     const desiredRoutine = selectedRoutine ?? await this.resolveRoutineForMark(repos, mark);
     const routineChanged = desiredRoutine.id !== session.routineTemplateId;
-    const existingSnapshots = getOrderedSnapshots(await repos.strength.listSessionSnapshots(session.id));
     if (existingSnapshots.length === 0) {
       if (!routineChanged) {
         return session;
@@ -1414,18 +1379,6 @@ export class DefaultStrengthSessionEngine implements StrengthSessionEngine {
         currentExerciseSnapshotId: null,
         currentSetNumber: null,
       });
-    }
-
-    const existingLogs = await Promise.all(existingSnapshots.map((snapshot) => repos.strength.listSetLogs(snapshot.id)));
-    const hasSetLogs = existingLogs.some((logs) => logs.length > 0);
-    const hasProgress =
-      hasSetLogs ||
-      existingSnapshots.some(
-        (snapshot) =>
-          snapshot.status !== SessionExerciseStatus.NotStarted && snapshot.status !== SessionExerciseStatus.Active,
-      );
-    if (hasProgress) {
-      return session;
     }
 
     const routineExercises = await repos.strength.listRoutineExercises(desiredRoutine.id);

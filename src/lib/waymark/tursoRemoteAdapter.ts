@@ -1084,7 +1084,7 @@ export class WaymarkTursoRemoteAdapter {
           ON CONFLICT(vault_id, id) DO UPDATE SET
             path_id = excluded.path_id,
             trail_day_id = excluded.trail_day_id,
-            template_id = excluded.template_id,
+            template_id = COALESCE(excluded.template_id, mark_instances.template_id),
             expedition_id = excluded.expedition_id,
             milestone_id = excluded.milestone_id,
             title = excluded.title,

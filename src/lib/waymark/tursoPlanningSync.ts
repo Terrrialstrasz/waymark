@@ -641,7 +641,18 @@ export async function reconcileLocalWeeklyPlanningMaterialization(input: {
         AND wp.deleted_at IS NULL
         AND wp.status IN ('draft', 'active')
        LEFT JOIN mark_instances mi
-         ON mi.id = wpi.created_mark_instance_id
+         ON (
+           mi.id = wpi.created_mark_instance_id
+           OR (
+             wpi.created_mark_instance_id IS NULL
+             AND wpi.deterministic_import_key IS NOT NULL
+             AND mi.generation_key = CASE
+               WHEN wpi.deterministic_import_key LIKE 'weekly_timetable:%'
+                 THEN 'weekly_planned:' || SUBSTR(wpi.deterministic_import_key, LENGTH('weekly_timetable:') + 1)
+               ELSE 'weekly_planned:' || wpi.deterministic_import_key
+             END
+           )
+         )
         AND mi.deleted_at IS NULL
        LEFT JOIN mark_instance_details mid
          ON mid.mark_instance_id = mi.id
@@ -650,7 +661,12 @@ export async function reconcileLocalWeeklyPlanningMaterialization(input: {
          AND wpi.status NOT IN ('removed', 'done')
          AND wpi.sync_status = 'synced'
          AND (
-           wpi.created_mark_instance_id IS NULL
+           mi.id IS NULL
+           OR wpi.created_mark_instance_id IS NULL
+           OR (
+             wpi.template_id IS NOT NULL
+             AND mi.template_id IS NULL
+           )
            OR (
              mi.id IS NOT NULL
              AND TRIM(COALESCE(wpi.description, '')) <> ''

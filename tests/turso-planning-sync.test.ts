@@ -7,6 +7,7 @@ import {
   pullAllTrailDaysFromTurso,
   pullTypedPlanningFromTurso,
   pullTypedPlanningWeekPlansFromTurso,
+  reconcileLocalWeeklyPlanningMaterialization,
   uploadTypedWeekPlanItemsToTurso,
   uploadTypedWeekPlansToTurso,
   type TursoPlanningMarkInstanceSnapshot,
@@ -1592,6 +1593,50 @@ async function run() {
       assert.equal(cleanTrailDay?.planned_mark_count, 1);
       assert.equal(cleanDetail?.primer_snapshot, "Pulled from Turso typed planning");
       assert.equal(cleanDetail?.pre_action_comment, "User-authored Mark Note");
+
+      await cleanHarness.db.runAsync(
+        `INSERT INTO mark_templates (
+           id, user_id, path_id, title, template_type, recurrence_type,
+           recurrence_rule_json, is_active, created_at, updated_at, sync_status, local_revision
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        "template_late_binding",
+        "user_clean",
+        "path_clean",
+        "Late workout template",
+        "workout",
+        "none",
+        "{}",
+        1,
+        160,
+        160,
+        "synced",
+        1,
+      );
+      await cleanHarness.db.runAsync(
+        "UPDATE mark_instances SET status = 'active', template_id = NULL WHERE id = ?;",
+        cleanItem?.created_mark_instance_id,
+      );
+      await cleanHarness.db.runAsync(
+        "UPDATE week_plan_items SET template_id = 'template_late_binding', sync_status = 'synced' WHERE id = 'week_plan_item_remote';",
+      );
+      const lateBindingRepair = await reconcileLocalWeeklyPlanningMaterialization({
+        executor: cleanHarness.db as any,
+        now: 165,
+      });
+      const protectedLateBinding = await cleanHarness.db.getFirstAsync<{
+        status: string;
+        template_id: string | null;
+        created_mark_instance_id: string;
+      }>(
+        `SELECT mi.status, mi.template_id, wpi.created_mark_instance_id
+         FROM week_plan_items wpi
+         INNER JOIN mark_instances mi ON mi.id = wpi.created_mark_instance_id
+         WHERE wpi.id = 'week_plan_item_remote';`,
+      );
+      assert.equal(lateBindingRepair.materializedWeekPlanItems.protected, 1);
+      assert.equal(protectedLateBinding?.status, "active");
+      assert.equal(protectedLateBinding?.template_id, null);
+      assert.equal(protectedLateBinding?.created_mark_instance_id, cleanItem?.created_mark_instance_id);
 
       cleanAdapter.changes.push({
         changeSequence: 5,

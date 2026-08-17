@@ -11,7 +11,7 @@ import { MarkDetailTemplate as MarkDetailScreen } from "../components/mark-detai
 import { MemoryDetailTemplate as MemoryDetailScreen } from "../components/memory-detail/MemoryDetailTemplate";
 import { PackCheckTemplate } from "../components/pack-check";
 import { PathDetailTemplate } from "../components/paths/PathDetailTemplate";
-import { WeeklyMilestonesTemplate } from "../components/paths/WeeklyMilestonesTemplate";
+import { PathsHomeTemplate } from "../components/paths/PathsHomeTemplate";
 import type { WeeklyMilestoneItem, WeeklyMilestoneMarkItem } from "../components/paths/types";
 import { BottomNavBar } from "../components/primitives/BottomNavBar";
 import { WMChip } from "../components/primitives/WMChip";
@@ -28,7 +28,6 @@ import type { TodayMarkItem, TodayMarkLaunchConfig, TodayMarkStatus, TodayPackCh
 import { getActiveExercise, getCurrentSet, getNextExercise, getNextSet } from "../components/health/strength/utils";
 import { getStrengthSessionPrimaryAction } from "../components/health/strength/getStrengthSessionPrimaryAction";
 import { WeeklySignalReviewTemplate } from "../components/weekly-timetable/WeeklySignalReviewTemplate";
-import { WeeklyTimetableReviewTemplate } from "../components/weekly-timetable/WeeklyTimetableReviewTemplate";
 import { MeOverviewTemplate } from "./me/MeOverviewTemplate";
 import { getCopy } from "../i18n/copy";
 import type {
@@ -44,21 +43,7 @@ import {
   clearLocalProgressMapForTursoPull,
   exportWaymarkDatabaseAsync,
   getWaymarkSignalAlarmHealth,
-  importGolfProgramDevMarks,
-  importWeeklyTimetable20260608To0614,
-  importWeeklyTimetable20260615To0621,
-  importWeeklyTimetable20260622To0628,
-  importWeeklyTimetable20260629To0705,
-  importWeeklyTimetable202607020305Patch,
-  importWeeklyTimetable20260706To0712,
-  importBreakfastMarks20260713To0719,
-  importWeeklyTimetable20260713To0719,
-  importWeekendHospitalCarePatch20260725To0726,
-  importWeeklyTimetable20260720To0726,
-  importWeeklyTimetable20260727To0802,
-  importWeeklyTimetable20260803To0809,
   importDevJournalMemoriesFromExportFixture,
-  repairWorkoutDatabase,
   openWaymarkAlarmNotificationSettings,
   openWaymarkExactAlarmSettings,
   openWaymarkFullScreenIntentSettings,
@@ -111,7 +96,7 @@ import { saveGolfPracticeLog } from "../lib/waymark/golfPractice";
 import { buildGolfShortGamePracticePlanForMarkTitle, resolveGolfPracticeWorkoutTypeForMarkTitle } from "../lib/waymark/golfPracticeMark";
 import { buildGolfProgramPracticePlanForTitle } from "../config/golfProgramCatalog";
 import { deleteMarkDetail, loadStrengthSessionReadModel } from "../lib/waymark/shellAppAdapters";
-import { isMarkFinalStatus, setMarkMetadata, type MarkResolutionKind } from "../lib/waymark";
+import { findRoutineBindingByTitle, isMarkFinalStatus, setMarkMetadata, type MarkResolutionKind } from "../lib/waymark";
 import { getMarkMetadata } from "../lib/waymark/markMetadataStore";
 import { getMarkTemplateSeedMetadata } from "../lib/waymark/markTemplateSeedStore";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
@@ -121,10 +106,11 @@ import type { StrengthExercise, StrengthSessionData } from "../types/strengthSes
 import type { SaveGolfPracticeLogInput } from "../types/golfPractice";
 import type { BottomTabId, Locale, PathId } from "../types/ui";
 import type { CaptureMediaAttachment } from "../types/capture";
+import { recordProductionDiagnostic } from "../app/productionDiagnostics";
 
 const ENABLE_PREVIEW_ME_TOOLS =
-  getWaymarkAppVariant() === "dev" &&
-  (__DEV__ || process.env.EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS === "true");
+  getWaymarkAppVariant() === "dev" ||
+  process.env.EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS === "true";
 
 type SubstituteHierarchyOptions = {
   pathOptions: PathOption[];
@@ -228,7 +214,6 @@ type AppRoute =
   | { kind: "packCheck"; packId: string }
   | { kind: "expeditionDetail"; expeditionId: string; parentTab: Exclude<BottomTabId, "capture"> }
   | { kind: "backlog" }
-  | { kind: "weeklyTimetable" }
   | { kind: "weeklySignal" };
 
 function t(value: Record<Locale, string>, locale: Locale) {
@@ -324,27 +309,11 @@ function buildPackCheckViewModel(pack: TodayPackCheckItem): { name: string; path
 function buildMeHubItems(
   locale: Locale,
   openBacklog: () => void,
-  openWeeklyTimetable: () => void,
   openWeeklySignal: () => void,
   openCloseTrail: () => void,
 ) {
   const c = getCopy(locale).me;
   return [
-    {
-      id: "weekly-timetable",
-      title: locale === "vi" ? "Weekly Timetable" : "Weekly Timetable",
-      subtitle:
-        locale === "vi"
-          ? "Xem cac week_plan_items va mark materialization."
-          : "Review persisted week_plan_items and mark materialization.",
-      helperText:
-        locale === "vi"
-          ? "Xac minh source-of-truth truoc khi vao Today."
-          : "Verify the source of truth before Today reads it.",
-      icon: "entity.path" as const,
-      tone: "ivory" as const,
-      onPress: openWeeklyTimetable,
-    },
     {
       id: "weekly-signal",
       title: locale === "vi" ? "Weekly Signal" : "Weekly Signal",
@@ -384,7 +353,6 @@ function routeToTab(route: AppRoute): Exclude<BottomTabId, "capture"> {
       return "paths";
     case "me":
     case "backlog":
-    case "weeklyTimetable":
     case "weeklySignal":
       return "me";
     case "detail":
@@ -571,11 +539,11 @@ export function WaymarkShellApp() {
   const shouldLoadJournal = activeTab === "journal" || route.kind === "dailyJournal";
   const shouldLoadBacklog = route.kind === "backlog" || detailRoute?.sourceType === "backlog_item";
   const shouldLoadWeekly =
-    route.kind === "weeklyTimetable" ||
+    route.kind === "paths" ||
     route.kind === "weeklySignal";
   const shouldLoadCloseTrail = route.kind === "closeTrail";
   const shouldLoadToday = activeTab === "today" || route.kind === "signal" || shouldLoadCloseTrail;
-  const shouldLoadWeeklyMilestones = route.kind === "paths" || route.kind === "weeklyTimetable";
+  const shouldLoadWeeklyMilestones = route.kind === "paths";
 
   const googleDriveDevUpload = useGoogleDriveDevUpload(locale);
   const tursoDevSync = useWaymarkTursoDevSync(locale);
@@ -590,7 +558,7 @@ export function WaymarkShellApp() {
   const weekly = useWaymarkWeeklyCoding(locale, { enabled: shouldLoadWeekly });
   const weeklyMilestones = useWaymarkWeeklyMilestones(locale, {
     enabled: shouldLoadWeeklyMilestones,
-    weekStartDate: route.kind === "weeklyTimetable" ? weekly.selectedWeekStart : undefined,
+    weekStartDate: route.kind === "paths" ? weekly.selectedWeekStart : undefined,
   });
   const previousWeeklyTimetableWeekStartRef = useRef(weekly.selectedWeekStart);
 
@@ -598,7 +566,7 @@ export function WaymarkShellApp() {
     const previousWeekStart = previousWeeklyTimetableWeekStartRef.current;
     previousWeeklyTimetableWeekStartRef.current = weekly.selectedWeekStart;
 
-    if (route.kind !== "weeklyTimetable") {
+    if (route.kind !== "paths") {
       return;
     }
 
@@ -620,8 +588,8 @@ export function WaymarkShellApp() {
   }, [app.user.timezone, route.kind, weekly.selectedWeekStart]);
 
   const dayReview = useWaymarkDayReview(locale, {
-    enabled: route.kind === "weeklyTimetable",
-    localDate: route.kind === "weeklyTimetable" ? selectedWeeklyTimetableDayDate : null,
+    enabled: route.kind === "paths",
+    localDate: route.kind === "paths" ? selectedWeeklyTimetableDayDate : null,
   });
   const weeklyTimetableDayNavigatorDays = useMemo(() => {
     const today = formatLocalDate(new Date(), app.user.timezone);
@@ -845,9 +813,11 @@ export function WaymarkShellApp() {
       return;
     }
 
-    const stillVisible = todayMarks.some((mark) => mark.id === selectedTodayMark.id);
-    if (!stillVisible) {
+    const refreshedMark = todayMarks.find((mark) => mark.id === selectedTodayMark.id);
+    if (!refreshedMark) {
       setSelectedTodayMark(null);
+    } else if (refreshedMark !== selectedTodayMark) {
+      setSelectedTodayMark(refreshedMark);
     }
   }, [selectedTodayMark, todayMarks]);
 
@@ -993,7 +963,7 @@ export function WaymarkShellApp() {
     if (shouldLoadWeekly) {
       weekly.refresh();
     }
-    if (route.kind === "weeklyTimetable") {
+    if (route.kind === "paths") {
       dayReview.refresh();
     }
     if (shouldLoadJournal) {
@@ -1002,379 +972,6 @@ export function WaymarkShellApp() {
     weeklyMilestones.refresh();
     pathDetail.refresh();
     expeditionDetail.refresh();
-  };
-
-  const handleImportSampleWeeklyTimetable = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260608To0614(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.signals.length} signals cho tuan 2026-06-08 den 2026-06-14.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/kept ${report.signals.length} signals for the week of 2026-06-08 to 2026-06-14.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable20260615 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260615To0621(app.repositories, app.user.id);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items va materialize ${report.results.length} marks cho tuan 2026-06-15 den 2026-06-21.`
-            : `Saved ${report.items.length} week_plan_items and materialized ${report.results.length} marks for the week of 2026-06-15 to 2026-06-21.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260615] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable20260622 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260622To0628(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.packChecks.length} pack checks va ${report.signals.length} signals cho tuan 2026-06-22 den 2026-06-28.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/updated ${report.packChecks.length} pack checks plus ${report.signals.length} signals for the week of 2026-06-22 to 2026-06-28.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260622] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable20260629 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260629To0705(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.expeditions.length} expeditions, ${report.milestones.length} milestones, ${report.packChecks.length} pack checks va ${report.signals.length} signals cho tuan 2026-06-29 den 2026-07-05.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/updated ${report.expeditions.length} expeditions, ${report.milestones.length} milestones, ${report.packChecks.length} pack checks, and ${report.signals.length} signals for the week of 2026-06-29 to 2026-07-05.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260629] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable202607020305Patch = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable202607020305Patch(app, app.user.id);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da patch Weekly Timetable" : "Weekly Timetable patched",
-          locale === "vi"
-            ? `Da update rieng ${report.items.length} mark slots cho 02/07, 03/07 va 05/07. Da don ${report.removedWeekPlanItemIds.length} week items cu va ${report.removedMarkIds.length} marks cu con pristine; cac mark da xu ly/user-edited duoc giu nguyen.`
-            : `Updated ${report.items.length} mark slots for 2026-07-02, 2026-07-03, and 2026-07-05 only. Cleaned ${report.removedWeekPlanItemIds.length} old week items and ${report.removedMarkIds.length} old pristine marks; handled/user-edited marks were preserved.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable202607020305Patch] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong patch duoc Weekly Timetable" : "Unable to patch Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable20260706 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260706To0712(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.expeditions.length} expeditions, ${report.milestones.length} milestones va ${report.signals.length} fullscreen alarm signals cho tuan 2026-07-06 den 2026-07-12.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/updated ${report.expeditions.length} expeditions, ${report.milestones.length} milestones, and ${report.signals.length} full-screen alarm signals for the week of 2026-07-06 to 2026-07-12.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260706] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable20260713 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260713To0719(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.expeditions.length} expeditions, ${report.milestones.length} milestones, ${report.packChecks.length} pack checks va ${report.signals.length} signals cho tuan 2026-07-13 den 2026-07-19.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/updated ${report.expeditions.length} expeditions, ${report.milestones.length} milestones, ${report.packChecks.length} pack checks, and ${report.signals.length} signals for the week of 2026-07-13 to 2026-07-19.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260713] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable20260720 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260720To0726(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.packChecks.length} pack checks va ${report.signals.length} signals cho tuan 2026-07-20 den 2026-07-26. Hierarchy: link ${report.hierarchyLinks.linked}, bo trong ${report.hierarchyLinks.skipped.length}.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/kept ${report.packChecks.length} pack checks plus ${report.signals.length} signals for the week of 2026-07-20 to 2026-07-26. Hierarchy: linked ${report.hierarchyLinks.linked}, left blank ${report.hierarchyLinks.skipped.length}.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260720] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleWeekendHospitalCarePatch20260725 = () => {
-    Alert.alert(
-      locale === "vi" ? "Patch lich 25-26/07?" : "Patch 07/25-07/26 schedule?",
-      locale === "vi"
-        ? "Cap nhat rieng thu 7 va chu nhat thanh 6 mark trong bo trong vien. Cac mark cu con pristine se duoc don; mark da chay hoac co history se duoc giu lai va bao skipped."
-        : "Update only Saturday and Sunday into six hospital care marks. Old pristine marks are cleaned; marks with history are preserved and reported as skipped.",
-      [
-        { text: locale === "vi" ? "Huy" : "Cancel", style: "cancel" },
-        {
-          text: locale === "vi" ? "Patch" : "Patch",
-          onPress: () => {
-            void (async () => {
-              try {
-                const report = await importWeekendHospitalCarePatch20260725To0726(app, app.user.id, app.user.timezone);
-                refreshLoadedShellData();
-                Alert.alert(
-                  locale === "vi" ? "Da patch lich weekend" : "Weekend schedule patched",
-                  locale === "vi"
-                    ? `Da materialize ${report.results.length} marks cho 25-26/07 va tao/cap nhat ${report.signals.length} signals cham bo. Da don ${report.cleanup.removedWeekPlanItemIds.length} week items, ${report.cleanup.removedMarkIds.length} marks cu, ${report.cleanup.removedPackCheckInstanceIds.length} pack checks cu; skipped ${report.cleanup.skipped.length} item co history.`
-                    : `Materialized ${report.results.length} marks for 07/25-07/26 and created/kept ${report.signals.length} father-care signals. Cleaned ${report.cleanup.removedWeekPlanItemIds.length} week items, ${report.cleanup.removedMarkIds.length} old marks, ${report.cleanup.removedPackCheckInstanceIds.length} old pack checks; skipped ${report.cleanup.skipped.length} items with history.`,
-                  [
-                    {
-                      text: "OK",
-                      onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-                    },
-                  ],
-                );
-              } catch (error) {
-                console.error("[WaymarkWeekendHospitalCarePatch20260725] Import failed", error);
-                Alert.alert(
-                  locale === "vi" ? "Khong patch duoc lich weekend" : "Unable to patch weekend schedule",
-                  error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-                );
-              }
-            })();
-          },
-        },
-      ],
-    );
-  };
-
-  const handleImportWeeklyTimetable20260727 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260727To0802(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.packChecks.length} pack checks va ${report.signals.length} signals cho tuan 2026-07-27 den 2026-08-02. Hierarchy: link ${report.hierarchyLinks.linked}, bo trong ${report.hierarchyLinks.skipped.length}.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/kept ${report.packChecks.length} pack checks plus ${report.signals.length} signals for the week of 2026-07-27 to 2026-08-02. Hierarchy: linked ${report.hierarchyLinks.linked}, left blank ${report.hierarchyLinks.skipped.length}.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260727] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleImportWeeklyTimetable20260803 = () => {
-    void (async () => {
-      try {
-        const report = await importWeeklyTimetable20260803To0809(app, app.user.id, app.user.timezone);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Weekly Timetable" : "Weekly Timetable imported",
-          locale === "vi"
-            ? `Da luu ${report.items.length} week_plan_items, materialize ${report.results.length} marks, tao/cap nhat ${report.packChecks.length} pack checks va ${report.signals.length} signals cho tuan 2026-08-03 den 2026-08-09. Hierarchy: link ${report.hierarchyLinks.linked}, bo trong ${report.hierarchyLinks.skipped.length}.`
-            : `Saved ${report.items.length} week_plan_items, materialized ${report.results.length} marks, and created/kept ${report.packChecks.length} pack checks plus ${report.signals.length} signals for the week of 2026-08-03 to 2026-08-09. Hierarchy: linked ${report.hierarchyLinks.linked}, left blank ${report.hierarchyLinks.skipped.length}.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkWeeklyTimetable20260803] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Weekly Timetable" : "Unable to import Weekly Timetable",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
-  };
-
-  const handleRepairWorkoutDatabase = () => {
-    Alert.alert(
-      locale === "vi" ? "Cap nhat DB Workout A/B?" : "Update Workout A/B database?",
-      locale === "vi"
-        ? "Ghi lai routine Day A va Day B theo cau hinh 4 bai hien tai. Lich su workout da hoan thanh duoc giu nguyen; reset buoi tap hien tai sau khi cap nhat de tao lai danh sach bai."
-        : "Rewrite the Day A and Day B routines from the current four-exercise configuration. Completed workout history is preserved; reset the current session afterward to rebuild its exercise list.",
-      [
-        { text: locale === "vi" ? "Huy" : "Cancel", style: "cancel" },
-        {
-          text: locale === "vi" ? "Cap nhat" : "Update",
-          onPress: () => {
-            void (async () => {
-              try {
-                const report = await repairWorkoutDatabase(app.repositories, app.user.id);
-                refreshLoadedShellData();
-                Alert.alert(
-                  locale === "vi" ? "Da cap nhat DB Workout" : "Workout database updated",
-                  locale === "vi"
-                    ? `Da repair ${report.repaired.length} routine Workout A/B. Hay mo buoi tap hien tai va chon Reset workout de tao lai snapshot theo danh sach 4 bai.`
-                    : `Repaired ${report.repaired.length} Workout A/B routines. Open the current workout and choose Reset workout to rebuild its snapshot from the four-exercise list.`,
-                );
-              } catch (error) {
-                console.error("[WaymarkWorkoutDatabaseRepair] Repair failed", error);
-                Alert.alert(
-                  locale === "vi" ? "Khong cap nhat duoc DB Workout" : "Unable to update workout database",
-                  error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-                );
-              }
-            })();
-          },
-        },
-      ],
-    );
-  };
-
-  const handleImportBreakfastMarks20260713 = () => {
-    void (async () => {
-      try {
-        const report = await importBreakfastMarks20260713To0719(app.repositories, app.user.id);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import 7 mark bua sang" : "Breakfast marks imported",
-          locale === "vi"
-            ? `Da tao ${report.created.length}/${report.totalRequested} marks. Bo qua ${report.skippedExisting.length} marks da ton tai cung ngay/cung tieu de.`
-            : `Created ${report.created.length}/${report.totalRequested} marks. Skipped ${report.skippedExisting.length} existing same-day/same-title marks.`,
-          [
-            {
-              text: "OK",
-              onPress: () => pushRoute({ kind: "weeklyTimetable" }),
-            },
-          ],
-        );
-      } catch (error) {
-        console.error("[WaymarkBreakfastMarks20260713] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc mark bua sang" : "Unable to import breakfast marks",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
   };
 
   const handleClearSignalDatabase = () => {
@@ -1433,27 +1030,6 @@ export function WaymarkShellApp() {
     setTursoLinkUrl("");
     setTursoLinkToken("");
     setTursoLinkModalOpen(true);
-  };
-
-  const handleImportGolfProgramDevMarks = () => {
-    void (async () => {
-      try {
-        const report = await importGolfProgramDevMarks(app, app.user.id);
-        refreshLoadedShellData();
-        Alert.alert(
-          locale === "vi" ? "Da import Golf Program dev marks" : "Golf Program dev marks imported",
-          locale === "vi"
-            ? `Da tao/cap nhat ${report.results.length} marks test Golf Program: ${report.importedTitles.join(", ")}.`
-            : `Created/updated ${report.results.length} Golf Program test marks: ${report.importedTitles.join(", ")}.`,
-        );
-      } catch (error) {
-        console.error("[GolfProgramDevImport] Import failed", error);
-        Alert.alert(
-          locale === "vi" ? "Khong import duoc Golf Program dev marks" : "Unable to import Golf Program dev marks",
-          error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
-        );
-      }
-    })();
   };
 
   const handleSubmitTursoLink = () => {
@@ -2251,7 +1827,20 @@ export function WaymarkShellApp() {
     void openMarkByStatus(mark.id, parentTab, "execution", entryContext);
   };
   const openDayReviewMark = (mark: TodayMarkItem) => {
-    void openMarkByStatus(mark.id, "me", "review", "weekly_timetable");
+    void openMarkByStatus(mark.id, "paths", "review", "weekly_timetable");
+  };
+  const openWeeklyTimetableItem = async (itemId: string) => {
+    const item = await weekly.getWeekPlanItemById(itemId);
+    if (!item?.createdMarkInstanceId) {
+      Alert.alert(
+        locale === "vi" ? "Mark chưa được tạo" : "Mark not materialized",
+        locale === "vi"
+          ? "Timetable item này chưa có Mark local để mở."
+          : "This timetable item does not have a local Mark to open.",
+      );
+      return;
+    }
+    await openMarkByStatus(item.createdMarkInstanceId, "paths", "review", "weekly_timetable");
   };
   const openMarkByStatus = async (
     markId: string,
@@ -2488,9 +2077,38 @@ export function WaymarkShellApp() {
     void (async () => {
       setStartingStrengthMarkId(markId);
       try {
+        const existingSession = await app.repositories.strength.getSessionByMarkInstance(markId);
+        void recordProductionDiagnostic({
+          category: "workout_session",
+          name: "open_from_mark",
+          correlationId: markId,
+          context: {
+            markId,
+            selectedRoutineTemplateId: value?.routineTemplateId ?? null,
+            existingSessionId: existingSession?.id ?? null,
+            existingSessionStatus: existingSession?.status ?? null,
+            existingRoutineTemplateId: existingSession?.routineTemplateId ?? null,
+          },
+        });
+        if (
+          existingSession?.status === WorkoutSessionStatus.Completed ||
+          existingSession?.status === WorkoutSessionStatus.PartiallyCompleted ||
+          existingSession?.status === WorkoutSessionStatus.Abandoned
+        ) {
+          pushRoute({ kind: "workoutReview", markId, parentTab, routineTemplateId: existingSession.routineTemplateId });
+          return;
+        }
         await app.strengthSessionEngine.startWorkoutSession({ markInstanceId: markId, routineTemplateId: value?.routineTemplateId });
         pushRoute({ kind: "strengthSession", markId, parentTab });
       } catch (error) {
+        void recordProductionDiagnostic({
+          category: "workout_session",
+          name: "open_from_mark_failed",
+          severity: "error",
+          correlationId: markId,
+          context: { markId, selectedRoutineTemplateId: value?.routineTemplateId ?? null },
+          error,
+        });
         Alert.alert(
           locale === "vi" ? "Khong mo duoc buoi tap" : "Unable to open workout session",
           error instanceof Error ? error.message : locale === "vi" ? "Da co loi xay ra." : "An unexpected error occurred.",
@@ -3054,17 +2672,34 @@ export function WaymarkShellApp() {
       return;
     }
     if (mark?.interactionKind === "golf_practice") {
+      const existingSession = await app.repositories.strength.getSessionByMarkInstance(markId);
       const selectedOption = value?.routineTemplateId
         ? mark.actionSheet?.launchConfig?.options.find((option) => option.routineTemplateId === value.routineTemplateId)
         : undefined;
       const selectedTitle = selectedOption?.title.en ?? mark.title.en;
       setSelectedTodayMark(null);
-      openGolfPractice("today", {
-        markId,
-        markTitle: selectedTitle,
-        routineTemplateId: value?.routineTemplateId,
-        workoutType: resolveGolfPracticeWorkoutTypeForMarkTitle(selectedTitle) ?? "putting",
-      });
+      if (
+        existingSession?.status === WorkoutSessionStatus.Completed ||
+        existingSession?.status === WorkoutSessionStatus.PartiallyCompleted ||
+        existingSession?.status === WorkoutSessionStatus.Abandoned
+      ) {
+        pushRoute({
+          kind: "golfPractice",
+          parentTab: "today",
+          markId,
+          markTitle: selectedTitle,
+          routineTemplateId: existingSession.routineTemplateId,
+          workoutType: resolveGolfPracticeWorkoutTypeForMarkTitle(selectedTitle) ?? "putting",
+          mode: "review",
+        });
+      } else {
+        openGolfPractice("today", {
+          markId,
+          markTitle: selectedTitle,
+          routineTemplateId: value?.routineTemplateId ?? existingSession?.routineTemplateId,
+          workoutType: resolveGolfPracticeWorkoutTypeForMarkTitle(selectedTitle) ?? "putting",
+        });
+      }
       return;
     }
 
@@ -3197,19 +2832,56 @@ export function WaymarkShellApp() {
         );
       });
 
+      const targetRoutines = targetPath
+        ? await app.repositories.strength.listRoutinesByPath(targetPath.id)
+        : [];
+      const substituteRoutine = findRoutineBindingByTitle(
+        value.title,
+        targetRoutines,
+        value.pathId === "golf" ? "golf_practice" : "strength",
+      );
+
       await liveToday.assertReplanActionAllowed(markId);
-      await app.markEngine.substituteMarkInstance({
+      const substitution = await app.markEngine.substituteMarkInstance({
         markInstanceId: markId,
         substituteTitle: value.title.trim(),
         substituteDescription: value.detail?.trim() || undefined,
         substitutePathId: targetPath?.id,
+        substituteTemplateId: substituteRoutine?.markTemplateId ?? null,
+        substituteWorkoutFlow: value.pathId !== "golf" && Boolean(substituteRoutine),
         substituteExpeditionId: value.expeditionId,
         substituteMilestoneId: value.milestoneId,
         substituteMode: { mode: "ready" },
       });
-      liveToday.refresh();
-      journal.refresh();
-    })();
+      setSelectedTodayMark(null);
+      setSelectedWeeklyMark(null);
+      void recordProductionDiagnostic({
+        category: "ui_action",
+        name: "mark_substituted",
+        correlationId: markId,
+        context: {
+          originalMarkId: markId,
+          substituteMarkId: substitution.substitute.id,
+          substitutePathId: targetPath?.id ?? null,
+          substituteRoutineTemplateId: substituteRoutine?.id ?? null,
+          substituteMarkTemplateId: substituteRoutine?.markTemplateId ?? null,
+        },
+      });
+      refreshLoadedShellData();
+    })().catch((error) => {
+      void recordProductionDiagnostic({
+        category: "ui_action",
+        name: "mark_substitution_failed",
+        severity: "error",
+        correlationId: markId,
+        context: { originalMarkId: markId, substitutePathId: value.pathId },
+        error,
+      });
+      Alert.alert(
+        locale === "vi" ? "Không thể thay thế mark" : "Unable to substitute mark",
+        error instanceof Error ? error.message : locale === "vi" ? "Đã có lỗi xảy ra." : "An unexpected error occurred.",
+      );
+    });
   };
 
   const togglePackCheckItem = (packId: string, itemId: string) => {
@@ -3617,6 +3289,15 @@ export function WaymarkShellApp() {
               latestHero={latestHero}
               locale={locale}
               lookBackCards={journal.home?.lookBackCards ?? []}
+              mediaSync={{
+                connected: googleDriveDevUpload.connected,
+                disabled: googleDriveDevUpload.disabled,
+                authenticating: googleDriveDevUpload.status === "authenticating",
+                uploading: googleDriveDevUpload.status === "uploading",
+                message: googleDriveDevUpload.lastMessage,
+                onConnect: googleDriveDevUpload.connect,
+                onUpload: googleDriveDevUpload.runPendingUpload,
+              }}
               onOpenRecentCollection={(rowId) => pushRoute({ kind: "dailyJournal", dayKey: rowId })}
               onSelectDate={(dayKey) => pushRoute({ kind: "dailyJournal", dayKey })}
               recentRows={journal.home?.recentRows ?? []}
@@ -3676,18 +3357,45 @@ export function WaymarkShellApp() {
       }
       case "paths":
         return (
-          <WeeklyMilestonesTemplate
-            errorMessage={weeklyMilestones.error?.message}
+          <PathsHomeTemplate
+            dayNavigatorDays={weeklyTimetableDayNavigatorDays}
+            days={weekly.reviewDays}
             locale={locale}
+            milestoneErrorMessage={weeklyMilestones.error?.message}
+            milestoneStatus={weeklyMilestones.status}
             milestones={weeklyMilestones.items}
+            nextWeekDisabled={weekly.nextWeekDisabled}
             onCompleteMilestone={(milestoneId) => void completeWeeklyMilestone(milestoneId)}
+            onConnectTurso={handleOpenTursoLinkModal}
+            onNextWeek={weekly.nextWeek}
             onMoveMilestone={(milestoneId) => void moveWeeklyMilestone(milestoneId)}
-            onOpenMark={openWeeklyMilestoneMark}
-            onOpenPath={(pathId) => pushRoute({ kind: "pathDetail", pathId })}
+            onOpenDayMark={openDayReviewMark}
             onOpenExpedition={(expeditionId) => openExpedition(expeditionId, "paths")}
+            onOpenMark={(milestone, mark) => openWeeklyMilestoneMark(milestone, mark, "paths", "weekly_timetable")}
+            onOpenPath={(pathId) => pushRoute({ kind: "pathDetail", pathId })}
+            onOpenPlanItem={(itemId) => void openWeeklyTimetableItem(itemId)}
+            onPreviousWeek={weekly.previousWeek}
+            onPullTurso={handleTursoPullRemoteEdits}
+            onPushTurso={handleTursoManualUpload}
+            onSelectDayDate={setSelectedWeeklyTimetableDayDate}
             onSkipMilestone={(milestoneId) => void skipWeeklyMilestone(milestoneId)}
-            showBottomNav={false}
-            status={weeklyMilestones.status}
+            previousWeekDisabled={weekly.previousWeekDisabled}
+            selectedDayDate={selectedWeeklyTimetableDayDate}
+            selectedDayErrorMessage={dayReview.error?.message}
+            selectedDayIsHistorical={selectedWeeklyTimetableDayDate < formatLocalDate(new Date(), app.user.timezone)}
+            selectedDayLabel={selectedWeeklyTimetableDayLabel}
+            selectedDayMarks={dayReview.marks}
+            selectedDayStatus={dayReview.status}
+            selectedWeekDateRange={weekly.selectedWeekDateRange}
+            selectedWeekLabel={weekly.selectedWeekLabel}
+            summary={weekly.reviewSummary}
+            timetableErrorMessage={weekly.error?.message}
+            timetableStatus={weekly.status}
+            tursoConfigured={tursoDevSync.configured}
+            tursoDisabled={tursoDevSync.disabled}
+            tursoMessage={tursoDevSync.lastMessage}
+            tursoPulling={tursoDevSync.status === "pulling"}
+            tursoPushing={tursoDevSync.status === "uploading"}
           />
         );
       case "me":
@@ -3696,7 +3404,6 @@ export function WaymarkShellApp() {
             hubItems={buildMeHubItems(
               locale,
               () => pushRoute({ kind: "backlog" }),
-              () => pushRoute({ kind: "weeklyTimetable" }),
               () => pushRoute({ kind: "weeklySignal" }),
               () => pushRoute({ kind: "closeTrail" }),
             )}
@@ -3729,164 +3436,14 @@ export function WaymarkShellApp() {
                 },
               ],
               groups: [
-                ...(ENABLE_PREVIEW_ME_TOOLS ? [{
-                  id: "dev-weekly-imports",
-                  title: locale === "vi" ? "Weekly Timetable Import" : "Weekly Timetable Import",
-                  subtitle:
-                    locale === "vi"
-                      ? "Nhap/cap nhat lich tuan vao week plans, planned marks va signals."
-                      : "Import and update weekly schedules into week plans, planned marks, and signals.",
-                  rows: [
-                    {
-                      id: "prod-import-golf-program-dev-marks",
-                      title: locale === "vi" ? "Import Golf Program dev marks" : "Import Golf Program dev marks",
-                      subtitle:
-                        locale === "vi"
-                          ? "Tao 4 marks test cho flow Warm-up -> Revision -> Practice cua chuong trinh golf 13 tuan."
-                          : "Create 4 test marks for the Golf Program Warm-up -> Revision -> Practice flow.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportGolfProgramDevMarks,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260803",
-                      title: locale === "vi" ? "Import Weekly Timetable 03/08" : "Import Weekly Timetable 08/03",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 03/08-09/08: 85 Planned Marks, workout/golf dung flow, n8n tach tung block."
-                          : "Import the 2026-08-03 to 2026-08-09 plan: 85 Planned Marks, routed workout/golf flows, and separate n8n blocks.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260803,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260727",
-                      title: locale === "vi" ? "Import Weekly Timetable 27/07" : "Import Weekly Timetable 07/27",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 27/07-02/08 data-only: 74 Planned Marks, signals truc tiep, khong tao hierarchy moi."
-                          : "Import the 2026-07-27 to 2026-08-02 data-only plan: 74 Planned Marks, direct signals, and no new hierarchy.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260727,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260720",
-                      title: locale === "vi" ? "Import Weekly Timetable 20/07" : "Import Weekly Timetable 07/20",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 20/07-26/07 data-only: 69 Planned Marks, signals truc tiep, khong tao hierarchy moi."
-                          : "Import the 2026-07-20 to 2026-07-26 data-only plan: 69 Planned Marks, direct signals, and no new hierarchy.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260720,
-                    },
-                    {
-                      id: "prod-patch-weekend-hospital-care-20260725",
-                      title: locale === "vi" ? "Patch cham bo 25-26/07" : "Patch father care 07/25-07/26",
-                      subtitle:
-                        locale === "vi"
-                          ? "Cap nhat rieng thu 7/chu nhat: 6 mark trong bo trong vien, signal truc tiep truoc 15 phut, khong tao pack check moi."
-                          : "Update only Sat/Sun: six hospital care marks, direct 15-minute signals, and no new pack checks.",
-                      icon: "entity.mark" as const,
-                      onPress: handleWeekendHospitalCarePatch20260725,
-                    },
-                    {
-                      id: "prod-repair-workout-database",
-                      title: locale === "vi" ? "Cap nhat DB Workout A/B" : "Update Workout A/B database",
-                      subtitle:
-                        locale === "vi"
-                          ? "Repair routine Day A/B theo cau hinh 4 bai; giu nguyen lich su workout da hoan thanh."
-                          : "Repair Day A/B routines from the four-exercise configuration while preserving completed workout history.",
-                      icon: "health.strength" as const,
-                      onPress: handleRepairWorkoutDatabase,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260713",
-                      title: locale === "vi" ? "Import Weekly Timetable 13/07" : "Import Weekly Timetable 07/13",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 13/07-19/07, gom Mark + Signal V3, golf weekday/weekend dung rule va khong tao Golf Practice Pack Check."
-                          : "Import the 2026-07-13 to 2026-07-19 Mark + Signal V3 plan with weekday/weekend golf rules and no Golf Practice Pack Check.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260713,
-                    },
-                    {
-                      id: "prod-import-breakfast-marks-20260713",
-                      title: locale === "vi" ? "Import 7 mark bua sang 13/07" : "Import 7 breakfast marks 07/13",
-                      subtitle:
-                        locale === "vi"
-                          ? "Chi tao mark 07:00 cho 13/07-19/07; bo qua ngay da co mark cung tieu de de tranh trung."
-                          : "Only creates the 07:00 marks for 2026-07-13 to 2026-07-19; skips days that already have the same title.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportBreakfastMarks20260713,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260706",
-                      title: locale === "vi" ? "Import Weekly Timetable 06/07" : "Import Weekly Timetable 07/06",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 06/07-12/07, tao Tony Golf/DCH structure, planned marks khong due date va fullscreen alarm signals."
-                          : "Import the 2026-07-06 to 2026-07-12 schedule, Tony Golf/DCH structure, no-due-date planned marks, and full-screen alarm signals.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260706,
-                    },
-                    {
-                      id: "prod-patch-weekly-timetable-202607020305",
-                      title: locale === "vi" ? "Patch Timetable 02/07, 03/07, 05/07" : "Patch Timetable 07/02, 07/03, 07/05",
-                      subtitle:
-                        locale === "vi"
-                          ? "Chi update mark slots cho Thu 5, Thu 6 va Chu nhat; giu nguyen cac ngay khac va mark da xu ly."
-                          : "Only updates mark slots for Thu, Fri, and Sunday; preserves other days and handled marks.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable202607020305Patch,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260629",
-                      title: locale === "vi" ? "Import Weekly Timetable 29/06" : "Import Weekly Timetable 06/29",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 29/06-05/07, tao DCH/BA Core structure, planned marks khong due date, pack checks va signals."
-                          : "Import the 2026-06-29 to 2026-07-05 schedule, DCH/BA Core structure, no-due-date planned marks, pack checks, and signals.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260629,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260622",
-                      title: locale === "vi" ? "Import Weekly Timetable 22/06" : "Import Weekly Timetable 06/22",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 22/06-28/06 vao week_plans va planned marks, giu nguyen ten Mark tieng Viet co dau."
-                          : "Import the 2026-06-22 to 2026-06-28 schedule into week_plans and planned marks, preserving Vietnamese Mark titles.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260622,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable-20260615",
-                      title: locale === "vi" ? "Import Weekly Timetable 15/06" : "Import Weekly Timetable 06/15",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 15/06-21/06 vao week_plans va planned marks bang path/expedition/milestone refs."
-                          : "Import the 2026-06-15 to 2026-06-21 schedule into week_plans and planned marks using path, expedition, and milestone refs.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportWeeklyTimetable20260615,
-                    },
-                    {
-                      id: "prod-import-weekly-timetable",
-                      title: locale === "vi" ? "Import Weekly Timetable 08/06" : "Import Weekly Timetable 06/08",
-                      subtitle:
-                        locale === "vi"
-                          ? "Import lich 08/06-14/06 vao week_plans, planned marks, anchors, pack checks va signals."
-                          : "Import the 2026-06-08 to 2026-06-14 schedule into week_plans, planned marks, anchors, pack checks, and signals.",
-                      icon: "entity.mark" as const,
-                      onPress: handleImportSampleWeeklyTimetable,
-                    },
-                  ],
-                }] : []),
                 {
                   id: "prod-turso-sync",
-                  title: locale === "vi" ? "Turso Sync" : "Turso Sync",
+                  title: locale === "vi" ? "Kết nối Turso" : "Turso Connection",
                   subtitle:
                     tursoDevSync.lastMessage ??
                     (locale === "vi"
-                      ? "Turso Full-DB la source of truth; Waymark pull vao cache va chi push mutation khi EOD."
-                      : "Turso Full-DB is source of truth; Waymark pulls into cache and pushes mutations only at EOD."),
+                      ? "Cấu hình kết nối và xem diagnostic; Pull/Push nằm trong Weekly Timetable."
+                      : "Configure the connection and inspect diagnostics; Pull/Push live in Weekly Timetable."),
                   rows: [
                     {
                       id: "prod-turso-link",
@@ -3908,35 +3465,21 @@ export function WaymarkShellApp() {
                       onPress: tursoDevSync.configured ? handleUnlinkTurso : handleOpenTursoLinkModal,
                     },
                     {
-                      id: "prod-turso-manual-upload",
-                      title: locale === "vi" ? "Chay EOD Full-DB Sync" : "Run EOD Full-DB Sync",
-                      subtitle:
-                        locale === "vi"
-                          ? "Day cac mutation Waymark duoc phep vao bang typed tren Turso; ownership va field allowlist duoc kiem tra."
-                          : "Push allowed Waymark mutations into typed Turso tables with ownership and field allowlists.",
-                      icon: "status.protected" as const,
-                      loading: tursoDevSync.status === "uploading",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoManualUpload,
-                    },
-                    {
-                      id: "prod-turso-pull-remote-edits",
-                      title: locale === "vi" ? "Pull Turso Full-DB" : "Pull Turso Full-DB",
-                      subtitle:
-                        locale === "vi"
-                          ? "Lan dau keo full snapshot; cac lan sau chi keo change log vao SQLite cache."
-                          : "Pull a full snapshot first, then apply incremental change-log entries into the SQLite cache.",
-                      icon: "entity.signal" as const,
-                      loading: tursoDevSync.status === "pulling",
-                      disabled: tursoDevSync.disabled || !tursoDevSync.configured,
-                      onPress: handleTursoPullRemoteEdits,
-                    },
-                    {
                       id: "prod-turso-download-log",
                       title: locale === "vi" ? "Get Turso Log" : "Get Turso Log",
                       subtitle: tursoDevSync.debugLogSummary,
                       icon: "entity.privateDocument" as const,
                       onPress: tursoDevSync.downloadDebugLog,
+                    },
+                    {
+                      id: "prod-diagnostic-bundle",
+                      title: locale === "vi" ? "Xuất diagnostic bundle" : "Export diagnostic bundle",
+                      subtitle:
+                        locale === "vi"
+                          ? "Xuất SQLite cùng log production bền vững để điều tra lỗi workout, substitute và Turso sync."
+                          : "Export SQLite with persistent production logs for workout, substitute, and Turso sync diagnosis.",
+                      icon: "entity.privateDocument" as const,
+                      onPress: handleExportLocalDatabase,
                     },
                   ],
                 },
@@ -3945,45 +3488,10 @@ export function WaymarkShellApp() {
                   title: locale === "vi" ? "Google Drive" : "Google Drive",
                   subtitle:
                     locale === "vi"
-                      ? "Ket noi va van hanh upload media that len Drive."
-                      : "Connect and run real media upload operations through Drive.",
+                      ? "Log va diagnostic cho media backup tren Drive."
+                      : "Logs and diagnostics for Drive media backup.",
                   rows: [
                     {
-                      id: "prod-google-drive-connect",
-                        title: googleDriveDevUpload.connected
-                          ? locale === "vi"
-                            ? "Google Drive da ket noi"
-                            : "Google Drive connected"
-                          : locale === "vi"
-                            ? "Ket noi Google Drive"
-                            : "Connect Google Drive",
-                        subtitle:
-                          googleDriveDevUpload.lastMessage ??
-                          (locale === "vi"
-                            ? `OAuth ${googleDriveDevUpload.oauthConfig.variant}: ${googleDriveDevUpload.oauthConfig.packageName} / ${googleDriveDevUpload.displayClientId} / ${googleDriveDevUpload.authDebug.redirectUri}`
-                            : `OAuth ${googleDriveDevUpload.oauthConfig.variant}: ${googleDriveDevUpload.oauthConfig.packageName} / ${googleDriveDevUpload.displayClientId} / ${googleDriveDevUpload.authDebug.redirectUri}`),
-                        icon: "status.protected" as const,
-                        loading: googleDriveDevUpload.status === "authenticating",
-                        disabled: googleDriveDevUpload.disabled,
-                        onPress: googleDriveDevUpload.connect,
-                      },
-                      {
-                        id: "prod-google-drive-run-upload",
-                        title: locale === "vi" ? "Run Drive media upload" : "Run Drive media upload",
-                        subtitle:
-                          googleDriveDevUpload.connected
-                            ? locale === "vi"
-                              ? "Upload pending days cu truoc; hom nay se hoi xac nhan snapshot."
-                              : "Uploads old pending days first; today requires snapshot confirmation."
-                            : locale === "vi"
-                              ? "Dang nhap Google Drive truoc khi chay EOD batch that."
-                              : "Sign in to Google Drive before running the real EOD batch.",
-                        icon: "entity.privateDocument" as const,
-                        loading: googleDriveDevUpload.status === "uploading",
-                        disabled: googleDriveDevUpload.disabled,
-                        onPress: googleDriveDevUpload.runPendingUpload,
-                      },
-                      {
                         id: "prod-google-drive-check-log",
                         title: locale === "vi" ? "Check Google Drive log" : "Check Google Drive log",
                         subtitle: googleDriveDevUpload.debugLogSummary,
@@ -4810,39 +4318,6 @@ export function WaymarkShellApp() {
             onQueryChange={() => undefined}
           />
         );
-      case "weeklyTimetable":
-        return (
-          <WeeklyTimetableReviewTemplate
-            errorMessage={weeklyMilestones.error?.message}
-            dayNavigatorDays={weeklyTimetableDayNavigatorDays}
-            dayReviewErrorMessage={dayReview.error?.message}
-            dayReviewHasWeeklyTimetableForDate={dayReview.hasWeeklyTimetableForDate}
-            dayReviewMarks={dayReview.marks}
-            dayReviewPlannedItemCount={dayReview.plannedItemCount}
-            dayReviewStatus={dayReview.status}
-            locale={locale}
-            milestones={weeklyMilestones.items}
-            nextWeekDisabled={weekly.nextWeekDisabled}
-            onBack={popRoute}
-            onCompleteMilestone={(milestoneId) => void completeWeeklyMilestone(milestoneId)}
-            onMoveMilestone={(milestoneId) => void moveWeeklyMilestone(milestoneId)}
-            onNextWeek={weekly.nextWeek}
-            onOpenExpedition={(expeditionId) => openExpedition(expeditionId, "me")}
-            onOpenMark={(milestone, mark) => openWeeklyMilestoneMark(milestone, mark, "me", "weekly_timetable")}
-            onOpenDayReviewMark={openDayReviewMark}
-            onOpenPath={(pathId) => pushRoute({ kind: "pathDetail", pathId })}
-            onPreviousWeek={weekly.previousWeek}
-            onSelectDayDate={setSelectedWeeklyTimetableDayDate}
-            onSkipMilestone={(milestoneId) => void skipWeeklyMilestone(milestoneId)}
-            previousWeekDisabled={weekly.previousWeekDisabled}
-            selectedDayDate={selectedWeeklyTimetableDayDate}
-            selectedDayLabel={selectedWeeklyTimetableDayLabel}
-            selectedWeekDateRange={weekly.selectedWeekDateRange}
-            selectedWeekLabel={weekly.selectedWeekLabel}
-            showBack
-            status={weeklyMilestones.status}
-          />
-        );
       case "weeklySignal":
         return (
           <WeeklySignalReviewTemplate
@@ -5452,7 +4927,7 @@ function clampDayOffset(value: number) {
 }
 
 function isContextMarkActionSheetRoute(kind: AppRoute["kind"]) {
-  return kind === "paths" || kind === "pathDetail" || kind === "expeditionDetail" || kind === "weeklyTimetable";
+  return kind === "paths" || kind === "pathDetail" || kind === "expeditionDetail";
 }
 
 function buildWaymarkLocalDateTime(localDate: string, time: string) {

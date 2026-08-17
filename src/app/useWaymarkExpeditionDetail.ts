@@ -3,9 +3,7 @@ import { ExpeditionDetailItem, ExpeditionMilestoneItem, ExpeditionNoMilestoneGro
 import { MilestoneStatus } from "../domain/waymark/enums";
 import type { Locale } from "../types/ui";
 import { useWaymarkApp } from "./WaymarkAppProvider";
-import { repairWeeklyTimetableMilestoneLinksForExpedition } from "../lib/waymark";
 import { buildExpeditionDetailModel, groupExpeditionMarksByMilestone } from "./expeditionDetailModel";
-import { formatLocalDate, shiftLocalDate } from "./waymarkUi";
 
 type ExpeditionDetailState =
   | { status: "idle" | "loading"; error: null; expedition: ExpeditionDetailItem | null; milestones: ExpeditionMilestoneItem[]; unassignedMarks: ExpeditionNoMilestoneGroupItem | null }
@@ -42,8 +40,6 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
           }
           return;
         }
-
-        await repairWeeklyTimetableMilestoneLinksForExpedition(app.repositories, expedition.userId, expedition.id);
 
         const path = await app.repositories.paths.getPathById(expedition.pathId);
         const milestones = await app.repositories.expeditions.listMilestonesByExpedition(expedition.id);
@@ -86,7 +82,6 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
     async (milestoneId: string) => {
       await app.repositories.expeditions.updateMilestone(milestoneId, {
         status: MilestoneStatus.Completed,
-        completedAt: new Date().toISOString(),
       });
       refresh();
     },
@@ -97,7 +92,6 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
     async (milestoneId: string) => {
       await app.repositories.expeditions.updateMilestone(milestoneId, {
         status: MilestoneStatus.Missed,
-        completedAt: null,
       });
       refresh();
     },
@@ -106,16 +100,12 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
 
   const rescheduleMilestone = useCallback(
     async (milestoneId: string) => {
-      const milestone = state.milestones.find((item) => item.id === milestoneId);
-      const currentTargetDate = toLocalDateString(milestone?.endDate) ?? formatLocalDate(new Date(), app.user.timezone);
       await app.repositories.expeditions.updateMilestone(milestoneId, {
         status: MilestoneStatus.Active,
-        targetDate: shiftLocalDate(currentTargetDate, 7),
-        completedAt: null,
       });
       refresh();
     },
-    [app.repositories.expeditions, app.user.timezone, refresh, state.milestones],
+    [app.repositories.expeditions, refresh],
   );
 
   return {
@@ -125,16 +115,4 @@ export function useWaymarkExpeditionDetail(locale: Locale, expeditionId: string 
     skipMilestone,
     rescheduleMilestone,
   };
-}
-
-function toLocalDateString(value: string | Date | undefined) {
-  if (!value) {
-    return undefined;
-  }
-
-  if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
-  }
-
-  return value.slice(0, 10);
 }

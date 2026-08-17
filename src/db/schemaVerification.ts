@@ -35,6 +35,7 @@ const REQUIRED_COLUMNS: Record<WaymarkTableName, readonly string[]> = {
     "vault_id",
     "device_id",
     "client_type",
+    "application_id",
     "schema_version",
     "map_version",
     "seed_version",
@@ -45,7 +46,7 @@ const REQUIRED_COLUMNS: Record<WaymarkTableName, readonly string[]> = {
     "last_cloud_sync_at",
   ],
   vaults: ["id", "name", "created_at", "updated_at", "status"],
-  devices: ["id", "vault_id", "client_type", "device_name", "created_at", "last_seen_at"],
+  devices: ["id", "vault_id", "client_type", "application_id", "device_name", "created_at", "last_seen_at"],
   sync_state: [
     "vault_id",
     "device_id",
@@ -59,6 +60,7 @@ const REQUIRED_COLUMNS: Record<WaymarkTableName, readonly string[]> = {
     "vault_id",
     "device_id",
     "db_instance_id",
+    "source_application_id",
     "entity_type",
     "entity_id",
     "operation",
@@ -70,11 +72,15 @@ const REQUIRED_COLUMNS: Record<WaymarkTableName, readonly string[]> = {
     "status",
     "retry_count",
     "last_error",
+    "error_kind",
+    "next_attempt_at",
+    "remote_revision",
+    "canonical_entity_id",
     "created_at",
     "updated_at",
     "synced_at",
   ],
-  sync_tombstones: ["entity_type", "entity_id", "vault_id", "device_id", "deleted_at", "local_revision", "reason"],
+  sync_tombstones: ["entity_type", "entity_id", "vault_id", "device_id", "source_application_id", "deleted_at", "local_revision", "reason"],
   user_profiles: ["id", "display_name", "locale", "timezone", "created_at", "updated_at"],
   app_settings: ["id", "user_id", "key", "value_json", "created_at", "updated_at", "deleted_at", "sync_status", "local_revision"],
   paths: [
@@ -703,6 +709,10 @@ const REQUIRED_INDEXES: readonly RequiredIndexSpec[] = [
   {
     name: "idx_sync_outbox_entity",
     sqlIncludes: ["ON sync_outbox(entity_type, entity_id, status)"],
+  },
+  {
+    name: "idx_sync_outbox_application_pending",
+    sqlIncludes: ["ON sync_outbox(vault_id, source_application_id, status, next_attempt_at, created_at)"],
   },
   {
     name: "ux_media_assets_user_content_owner_active",

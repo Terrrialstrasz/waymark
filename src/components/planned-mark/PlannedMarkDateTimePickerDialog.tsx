@@ -18,6 +18,9 @@ import { PlannedMarkPathTheme } from "./plannedMarkTheme";
 
 type PickerMode = null | "date" | "start" | "end";
 
+const MOVE_DATE_PAST_DAY_LIMIT = 30;
+const MOVE_DATE_FUTURE_DAY_LIMIT = 20;
+
 type Props = {
   visible?: boolean;
   title: string;
@@ -328,12 +331,13 @@ function DialogButton({
 }
 
 function buildDateOptions(locale: Locale): PickerOption[] {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  return Array.from({ length: 21 }, (_, index) => {
-    const value = new Date(start);
-    value.setDate(start.getDate() + index);
+  return Array.from({ length: MOVE_DATE_PAST_DAY_LIMIT + MOVE_DATE_FUTURE_DAY_LIMIT + 1 }, (_, index) => {
+    const dayOffset = index - MOVE_DATE_PAST_DAY_LIMIT;
+    const value = new Date(today);
+    value.setDate(today.getDate() + dayOffset);
     const isoValue = `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 
     const formatted =

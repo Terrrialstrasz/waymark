@@ -9,6 +9,7 @@ import { WMText } from "../primitives/Text";
 import { WaymarkSemanticIconName } from "../../design/waymark-icon-map";
 import { WaymarkImage } from "../primitives/WaymarkImage";
 import { todayCarouselCard } from "../today/todayCarouselCardTokens";
+import { isSettledTodayMarkStatus } from "../../app/todayMarksSummary";
 
 type Props = {
   mark: TodayMarkItem;
@@ -58,6 +59,7 @@ export function MarkCard({
   const path = pathMap.get(mark.pathId) ?? defaultPath;
   const colorSet = WAYMARK_PATH_COLORS[getTodayPathHeroTextColorKey(path.id)];
   const visualState = getMarkVisualState(mark.status, colorSet.accentSoft, colorSet.accentDeep, colorSet.accentMuted);
+  const settled = isSettledTodayMarkStatus(mark.status);
   const title = mark.title[locale];
   const summary = mark.summary?.[locale];
   const showSummary = shouldShowSummary(title, summary, variant);
@@ -94,7 +96,7 @@ export function MarkCard({
       <View style={styles.content}>
         <View style={[styles.body, !showSummary ? styles.bodyWithoutSummary : null]}>
           <View style={styles.titleWrap}>
-            <WMText numberOfLines={titleLineCount} style={[styles.title, { color: visualState.titleColor }]} variant="pageTitle">
+            <WMText numberOfLines={titleLineCount} style={[styles.title, { color: visualState.titleColor }, settled ? styles.titleFinal : null]} variant="pageTitle">
               {title}
             </WMText>
           </View>
@@ -325,6 +327,9 @@ const styles = StyleSheet.create({
   title: {
     color: foundationColors.ink.primary,
     ...todayCarouselCard.titleText,
+  },
+  titleFinal: {
+    textDecorationLine: "line-through",
   },
   summary: {
     ...todayCarouselCard.bodyText,

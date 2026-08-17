@@ -25,6 +25,8 @@ import { GOLF_PROGRAM_WEEKS, golfProgramRoutineTitle, type GolfProgramSetPlan, t
 const WEEKDAYS = [1, 2, 3, 4, 5];
 const SUPERVISING_CHECKLIST = ["Check Zalo", "Check mail", "Check Confluence", "Check Jira"];
 
+const HEALTH_WALK_ROUTINE_MARK_TEMPLATE_SEED_ID = "health_walk_routine_mark_template";
+
 function golfRoutineMarkTemplateSeedId(routineSeedId: string) {
   return `${routineSeedId}_mark_template`;
 }
@@ -1273,7 +1275,7 @@ function normalizeGolfProgramMilestones(milestones: SeedMilestoneConfig[]): Seed
 }
 
 export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
-  version: 13,
+  version: 14,
   paths: [
     { sourceSeedId: "career", slug: "career", title: "Career", sortOrder: 0 },
     { sourceSeedId: "snag", slug: "snag-golf-vietnam", title: "SNAG Golf Vietnam", sortOrder: 1 },
@@ -1628,6 +1630,24 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
       },
     },
     {
+      sourceSeedId: HEALTH_WALK_ROUTINE_MARK_TEMPLATE_SEED_ID,
+      pathSeedId: "health",
+      title: "Workout Walk Routine",
+      description: "Manual workout template bound authoritatively to the Walk Day routine.",
+      templateType: MarkTemplateType.Workout,
+      recurrenceRule: { kind: RecurrenceKind.Manual },
+      defaultDurationMin: 60,
+      isActive: true,
+      generation: {
+        blockType: "workout_block",
+        appearsInToday: true,
+        countsAsPathProof: true,
+        expeditionSeedId: "health.cut70.expedition",
+        milestoneSeedId: "health.cut70.milestone.76kg",
+        milestoneSourceSeedId: "health.cut70.milestone.76kg",
+      },
+    },
+    {
       sourceSeedId: "health_test_day_a_manual",
       pathSeedId: "health",
       title: "Workout Day A",
@@ -1693,7 +1713,10 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
     {
       sourceSeedId: "health_bodyweight_rep_progress_manual",
       pathSeedId: "health",
-      title: "Home Workout",
+      // Weekly planning labels the Mark "Workout Minimal". Turso owns this
+      // template under its canonical catalog title; Home Workout is the
+      // concrete routine linked to it.
+      title: "Body weight rep progress",
       templateType: MarkTemplateType.Workout,
       recurrenceRule: { kind: RecurrenceKind.Weekly, daysOfWeek: [3] },
       isActive: true,
@@ -2090,6 +2113,7 @@ export const WAYMARK_MAP_CONFIG: WaymarkMapConfig = {
     {
       sourceSeedId: "health_walk_routine",
       pathSeedId: "health",
+      markTemplateSeedId: HEALTH_WALK_ROUTINE_MARK_TEMPLATE_SEED_ID,
       title: "Walk Day",
       routineType: WorkoutRoutineType.Walk,
       cycleKey: "health_cycle",

@@ -17,8 +17,9 @@ const {
 const { createWaymarkTursoClient, WaymarkTursoRemoteAdapter } = require(path.join(compiledRoot, "tursoRemoteAdapter.js"));
 
 class NodeSqliteAdapter {
-  constructor(database) {
+  constructor(database, planningTemplateByMarkId = new Map()) {
     this.database = database;
+    this.planningTemplateByMarkId = planningTemplateByMarkId;
   }
 
   async runAsync(source, ...params) {
@@ -34,7 +35,11 @@ class NodeSqliteAdapter {
   }
 
   async getAllAsync(source, ...params) {
-    return this.database.prepare(source).all(...params);
+    const rows = this.database.prepare(source).all(...params);
+    if (!/\bFROM\s+mark_instances\b/iu.test(source)) {
+      return rows;
+    }
+    return rows.map((row) => applyPlanningTemplateFallback(row, this.planningTemplateByMarkId));
   }
 }
 
@@ -58,7 +63,8 @@ if (!url || !authToken) {
 }
 
 const database = new DatabaseSync(databasePath);
-const executor = new NodeSqliteAdapter(database);
+const bindingResolution = resolvePlanningTemplateBindings(database);
+const executor = new NodeSqliteAdapter(database, bindingResolution.templateByMarkId);
 const client = createWaymarkTursoClient({ url, authToken });
 
 try {
@@ -103,6 +109,10 @@ try {
 
   const adapter = new WaymarkTursoRemoteAdapter(client);
   await adapter.ensureSchema();
+  await validateRemoteTemplateReferences({ client, vaultId: String(metadata.vault_id), database, bindingResolution });
+  console.log(
+    `Template binding preflight: planning_links=${bindingResolution.linkedMarks}, recovered=${bindingResolution.recoveredMarks}, conflicts=0`,
+  );
   if (marksOnlyFast || trailDaysOnly) {
     const trailDays = await uploadTrailDaysFromExport({
       database,
@@ -113,7 +123,12 @@ try {
     console.log(`Turso Trail Day bootstrap: scanned=${trailDays.scanned}, uploaded=${trailDays.uploaded}`);
   }
   if (marksOnlyFast) {
-    const result = await uploadMarksInBatches({ database, client, vaultId: String(metadata.vault_id) });
+    const result = await uploadMarksInBatches({
+      database,
+      client,
+      vaultId: String(metadata.vault_id),
+      planningTemplateByMarkId: bindingResolution.templateByMarkId,
+    });
     console.log(`Turso mark bootstrap: scanned=${result.scanned}, uploaded=${result.uploaded}, batches=${result.batches}`);
   } else if (!trailDaysOnly) {
     const result = await uploadHierarchyProjectionToTurso({
@@ -212,7 +227,7 @@ function loadDotEnv() {
   }
 }
 
-async function uploadMarksInBatches({ database, client, vaultId }) {
+async function uploadMarksInBatches({ database, client, vaultId, planningTemplateByMarkId }) {
   const marks = database
     .prepare(`
       SELECT
@@ -224,7 +239,8 @@ async function uploadMarksInBatches({ database, client, vaultId }) {
       FROM mark_instances
       ORDER BY id;
     `)
-    .all();
+    .all()
+    .map((row) => applyPlanningTemplateFallback(row, planningTemplateByMarkId));
   const insertPrefix = `INSERT INTO mark_instances (
       id, vault_id, user_id, path_id, trail_day_id, template_id, expedition_id,
       milestone_id, title, description, origin, status, scheduled_start_at,
@@ -236,7 +252,7 @@ async function uploadMarksInBatches({ database, client, vaultId }) {
   const updateSuffix = ` ON CONFLICT(vault_id, id) DO UPDATE SET
       path_id = excluded.path_id,
       trail_day_id = excluded.trail_day_id,
-      template_id = excluded.template_id,
+      template_id = COALESCE(excluded.template_id, mark_instances.template_id),
       expedition_id = excluded.expedition_id,
       milestone_id = excluded.milestone_id,
       title = excluded.title,
@@ -300,6 +316,100 @@ async function uploadMarksInBatches({ database, client, vaultId }) {
     console.log(`Uploaded mark batch ${batches}: ${Math.min(index + chunk.length, marks.length)}/${marks.length}`);
   }
   return { scanned: marks.length, uploaded: marks.length, batches };
+}
+
+function resolvePlanningTemplateBindings(database) {
+  const hasPlanningTable = database
+    .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'week_plan_items' LIMIT 1;")
+    .get();
+  if (!hasPlanningTable) {
+    return { templateByMarkId: new Map(), linkedMarks: 0, recoveredMarks: 0 };
+  }
+
+  const rows = database
+    .prepare(`
+      SELECT m.id AS mark_id, m.template_id AS mark_template_id,
+             wpi.id AS week_plan_item_id, wpi.template_id AS planning_template_id
+      FROM mark_instances m
+      JOIN week_plan_items wpi
+        ON wpi.deleted_at IS NULL
+       AND wpi.template_id IS NOT NULL
+       AND (
+         wpi.created_mark_instance_id = m.id
+         OR (
+           m.generation_key IS NOT NULL
+           AND m.generation_key = CASE
+             WHEN wpi.deterministic_import_key LIKE 'weekly_timetable:%'
+               THEN 'weekly_planned:' || SUBSTR(wpi.deterministic_import_key, LENGTH('weekly_timetable:') + 1)
+             ELSE 'weekly_planned:' || wpi.deterministic_import_key
+           END
+         )
+       )
+      WHERE m.deleted_at IS NULL
+      ORDER BY m.id, wpi.id;
+    `)
+    .all();
+
+  const candidatesByMarkId = new Map();
+  for (const row of rows) {
+    const markId = String(row.mark_id);
+    const candidates = candidatesByMarkId.get(markId) ?? new Set();
+    candidates.add(String(row.planning_template_id));
+    candidatesByMarkId.set(markId, candidates);
+  }
+
+  const templateByMarkId = new Map();
+  let recoveredMarks = 0;
+  for (const [markId, candidates] of candidatesByMarkId) {
+    if (candidates.size !== 1) {
+      throw new Error(`Mark ${markId} is linked to conflicting planning templateIds: ${[...candidates].join(", ")}.`);
+    }
+    const planningTemplateId = [...candidates][0];
+    const row = rows.find((candidate) => String(candidate.mark_id) === markId);
+    if (row.mark_template_id && String(row.mark_template_id) !== planningTemplateId) {
+      throw new Error(
+        `Mark ${markId} template ${row.mark_template_id} conflicts with planning template ${planningTemplateId}.`,
+      );
+    }
+    templateByMarkId.set(markId, planningTemplateId);
+    if (!row.mark_template_id) {
+      recoveredMarks += 1;
+    }
+  }
+  return { templateByMarkId, linkedMarks: templateByMarkId.size, recoveredMarks };
+}
+
+function applyPlanningTemplateFallback(row, planningTemplateByMarkId) {
+  if (!row || row.id === null || row.id === undefined || !("template_id" in row)) {
+    return row;
+  }
+  const planningTemplateId = planningTemplateByMarkId.get(String(row.id));
+  if (!planningTemplateId || row.template_id !== null) {
+    return row;
+  }
+  return { ...row, template_id: planningTemplateId };
+}
+
+async function validateRemoteTemplateReferences({ client, vaultId, database, bindingResolution }) {
+  const localTemplateIds = database
+    .prepare("SELECT DISTINCT template_id FROM mark_instances WHERE deleted_at IS NULL AND template_id IS NOT NULL;")
+    .all()
+    .map((row) => String(row.template_id));
+  const requiredIds = [...new Set([...localTemplateIds, ...bindingResolution.templateByMarkId.values()])];
+  const existingIds = new Set();
+  for (let index = 0; index < requiredIds.length; index += 100) {
+    const chunk = requiredIds.slice(index, index + 100);
+    const result = await client.execute({
+      sql: `SELECT id FROM mark_templates
+        WHERE vault_id = ? AND deleted_at IS NULL AND id IN (${chunk.map(() => "?").join(", ")});`,
+      args: [vaultId, ...chunk],
+    });
+    for (const row of result.rows) existingIds.add(String(row[0]));
+  }
+  const missingIds = requiredIds.filter((id) => !existingIds.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(`Export references MarkTemplates missing on Turso: ${missingIds.join(", ")}. Upload foundation first.`);
+  }
 }
 
 function sqlLiteral(value) {

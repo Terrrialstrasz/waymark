@@ -1,5 +1,5 @@
 import type { WaymarkRepositories } from "../domain/waymark";
-import { importWeeklyTimetable, type WeeklyTimetableImportSlotInput } from "../lib/waymark";
+import { importWeeklyTimetable, type WeeklyTimetableImportSlotInput } from "../lib/waymark/weeklyTimetableImport";
 
 function slot(
   localDate: string,

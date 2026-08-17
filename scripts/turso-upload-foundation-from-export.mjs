@@ -21,7 +21,16 @@ const cliArgs = process.argv.slice(2);
 const catalogOnly = cliArgs.includes("--catalog-only");
 const planningOnly = cliArgs.includes("--planning-only");
 const latestExport = cliArgs.includes("--latest-export");
-const databasePathArgument = cliArgs.filter((value) => !value.startsWith("--")).join(" ");
+const routineTitleIndex = cliArgs.indexOf("--routine-title");
+const routineTitle = routineTitleIndex >= 0 ? cliArgs[routineTitleIndex + 1] : null;
+if (routineTitleIndex >= 0 && (!routineTitle || routineTitle.startsWith("--"))) {
+  throw new Error("--routine-title requires an exact routine title.");
+}
+const databasePathArgument = cliArgs.filter((value, index) => {
+  if (value.startsWith("--")) return false;
+  if (index > 0 && cliArgs[index - 1] === "--routine-title") return false;
+  return true;
+}).join(" ");
 if (latestExport && databasePathArgument) {
   throw new Error("Use either --latest-export or an explicit export path, not both.");
 }
@@ -66,10 +75,11 @@ try {
   };
 
   if (!planningOnly) {
-    const canonicalExerciseDefinitionIds = await buildCanonicalExerciseDefinitionIds(database, client, vaultId);
+    const catalogSelection = routineTitle ? buildRoutineCatalogSelection(database, routineTitle) : null;
+    const canonicalCatalogIds = await buildCanonicalCatalogIds(database, client, vaultId);
     for (const table of getCatalogTables()) {
       result.catalog.push(
-        await uploadCatalogTable({ database, client, vaultId, table, canonicalExerciseDefinitionIds }),
+        await uploadCatalogTable({ database, client, vaultId, table, canonicalCatalogIds, catalogSelection }),
       );
     }
   }
@@ -246,10 +256,14 @@ function getCatalogTables() {
   ];
 }
 
-async function uploadCatalogTable({ database, client, vaultId, table, canonicalExerciseDefinitionIds }) {
+async function uploadCatalogTable({ database, client, vaultId, table, canonicalCatalogIds, catalogSelection }) {
   const selectColumns = table.columns.join(", ");
-  const sourceRows = database.prepare(`SELECT ${selectColumns} FROM ${table.tableName} ORDER BY id;`).all();
-  const rows = normalizeCatalogRows(table.tableName, sourceRows, canonicalExerciseDefinitionIds);
+  const allSourceRows = database.prepare(`SELECT ${selectColumns} FROM ${table.tableName} ORDER BY id;`).all();
+  const selectedIds = catalogSelection?.get(table.tableName);
+  const sourceRows = selectedIds
+    ? allSourceRows.filter((row) => selectedIds.has(String(row.id)))
+    : allSourceRows;
+  const rows = normalizeCatalogRows(table.tableName, sourceRows, canonicalCatalogIds);
   const remoteColumns = [
     "id",
     "vault_id",
@@ -285,55 +299,219 @@ async function uploadCatalogTable({ database, client, vaultId, table, canonicalE
   return { tableName: table.tableName, scanned: sourceRows.length, uploaded: rows.length, batches };
 }
 
-async function buildCanonicalExerciseDefinitionIds(database, client, vaultId) {
-  const rows = database
-    .prepare("SELECT id, canonical_slug FROM exercise_definitions ORDER BY canonical_slug, id;")
-    .all();
-  const remote = await client.execute({
-    sql: `SELECT id, canonical_slug
-          FROM exercise_definitions
-          WHERE vault_id = ?
-          ORDER BY canonical_slug, id;`,
-    args: [vaultId],
+async function buildCanonicalCatalogIds(database, client, vaultId) {
+  const pathIds = await mapLocalIdsToRemoteBusinessIdentity({
+    localRows: database.prepare("SELECT id, slug FROM paths WHERE deleted_at IS NULL ORDER BY id;").all(),
+    remoteResult: await client.execute({
+      sql: "SELECT id, slug FROM paths WHERE vault_id = ? AND deleted_at IS NULL ORDER BY id;",
+      args: [vaultId],
+    }),
+    entityName: "path",
+    localKey: (row) => normalizeIdentity(row.slug),
+    remoteKey: (row) => normalizeIdentity(row.slug),
+    requireRemoteMatch: true,
   });
-  const canonicalIdBySlug = new Map(
-    remote.rows.map((row) => [String(row.canonical_slug), String(row.id)]),
+
+  const localMarkTemplates = database.prepare("SELECT id, path_id, title, template_type, recurrence_rule_json FROM mark_templates WHERE deleted_at IS NULL ORDER BY id;").all();
+  const remoteMarkTemplates = await client.execute({
+      sql: "SELECT id, path_id, title, template_type, recurrence_rule_json FROM mark_templates WHERE vault_id = ? AND deleted_at IS NULL ORDER BY id;",
+      args: [vaultId],
+    });
+  const markTemplateIds = await mapLocalIdsToRemoteBusinessIdentity({
+    localRows: localMarkTemplates,
+    remoteResult: remoteMarkTemplates,
+    entityName: "mark template",
+    localKey: (row) => identityKey(pathIds.get(String(row.path_id)), row.title, row.template_type, stableJsonIdentity(row.recurrence_rule_json)),
+    remoteKey: (row) => identityKey(row.path_id, row.title, row.template_type, stableJsonIdentity(row.recurrence_rule_json)),
+  });
+  applyExplicitMarkTemplateBindings(localMarkTemplates, remoteMarkTemplates.rows, markTemplateIds);
+
+  const packCheckTemplateIds = await mapLocalIdsToRemoteBusinessIdentity({
+    localRows: database.prepare("SELECT id, path_id, title, template_type FROM pack_check_templates WHERE deleted_at IS NULL ORDER BY id;").all(),
+    remoteResult: await client.execute({
+      sql: "SELECT id, path_id, title, template_type FROM pack_check_templates WHERE vault_id = ? AND deleted_at IS NULL ORDER BY id;",
+      args: [vaultId],
+    }),
+    entityName: "pack-check template",
+    localKey: (row) => identityKey(pathIds.get(String(row.path_id)), row.title, row.template_type),
+    remoteKey: (row) => identityKey(row.path_id, row.title, row.template_type),
+  });
+
+  // canonical_slug is descriptive, not an identity. Turso can legitimately
+  // contain several exercise definitions with the same slug under distinct
+  // IDs, so workspace uploads must preserve those IDs exactly.
+  const exerciseDefinitionIds = new Map(
+    database
+      .prepare("SELECT id FROM exercise_definitions WHERE deleted_at IS NULL ORDER BY id;")
+      .all()
+      .map((row) => [String(row.id), String(row.id)]),
   );
-  const canonicalIdBySourceId = new Map();
 
-  for (const row of rows) {
-    const slug = String(row.canonical_slug);
-    const sourceId = String(row.id);
-    const canonicalId = canonicalIdBySlug.get(slug) ?? sourceId;
-    canonicalIdBySlug.set(slug, canonicalId);
-    canonicalIdBySourceId.set(sourceId, canonicalId);
-  }
+  const workoutRoutineIds = await mapLocalIdsToRemoteBusinessIdentity({
+    localRows: database.prepare("SELECT id, path_id, title, routine_type FROM workout_routine_templates WHERE deleted_at IS NULL ORDER BY id;").all(),
+    remoteResult: await client.execute({
+      sql: "SELECT id, path_id, title, routine_type FROM workout_routine_templates WHERE vault_id = ? AND deleted_at IS NULL ORDER BY id;",
+      args: [vaultId],
+    }),
+    entityName: "workout routine",
+    localKey: (row) => identityKey(pathIds.get(String(row.path_id)), row.title, row.routine_type),
+    remoteKey: (row) => identityKey(row.path_id, row.title, row.routine_type),
+  });
 
-  return canonicalIdBySourceId;
+  return { pathIds, markTemplateIds, packCheckTemplateIds, exerciseDefinitionIds, workoutRoutineIds };
 }
 
-function normalizeCatalogRows(tableName, rows, canonicalExerciseDefinitionIds) {
+async function mapLocalIdsToRemoteBusinessIdentity(input) {
+  const remoteByKey = new Map();
+  for (const row of input.remoteResult.rows) {
+    const key = input.remoteKey(row);
+    const existing = remoteByKey.get(key);
+    if (existing && existing !== String(row.id)) {
+      throw new Error(`Turso has ambiguous ${input.entityName} business identity ${key}: ${existing}, ${String(row.id)}.`);
+    }
+    remoteByKey.set(key, String(row.id));
+  }
+
+  const result = new Map();
+  for (const row of input.localRows) {
+    const sourceId = String(row.id);
+    const key = input.localKey(row);
+    const remoteId = remoteByKey.get(key);
+    if (input.requireRemoteMatch && !remoteId) {
+      throw new Error(`Turso is missing canonical ${input.entityName} for workspace identity ${key}.`);
+    }
+    result.set(sourceId, remoteId ?? sourceId);
+  }
+  return result;
+}
+
+function normalizeCatalogRows(tableName, rows, canonicalIds) {
+  const remap = (map, value) => value == null ? value : map.get(String(value)) ?? String(value);
+  const remapPath = (row) => ({ ...row, path_id: remap(canonicalIds.pathIds, row.path_id) });
+
+  if (tableName === "mark_templates") {
+    return rows.map((row) => ({
+      ...remapPath(row),
+      id: remap(canonicalIds.markTemplateIds, row.id),
+    }));
+  }
+  if (tableName === "pack_check_templates") {
+    return rows.map((row) => ({
+      ...remapPath(row),
+      id: remap(canonicalIds.packCheckTemplateIds, row.id),
+    }));
+  }
+  if (tableName === "pack_check_item_templates") {
+    return rows.map((row) => ({
+      ...row,
+      pack_check_template_id: remap(canonicalIds.packCheckTemplateIds, row.pack_check_template_id),
+    }));
+  }
+  if (tableName === "mark_pack_check_rules") {
+    return rows.map((row) => ({
+      ...row,
+      mark_template_id: remap(canonicalIds.markTemplateIds, row.mark_template_id),
+      pack_check_template_id: remap(canonicalIds.packCheckTemplateIds, row.pack_check_template_id),
+    }));
+  }
   if (tableName === "exercise_definitions") {
     const emittedIds = new Set();
     const normalizedRows = [];
     for (const row of rows) {
-      const canonicalId = canonicalExerciseDefinitionIds.get(String(row.id)) ?? String(row.id);
+      const canonicalId = remap(canonicalIds.exerciseDefinitionIds, row.id);
       if (emittedIds.has(canonicalId)) {
         continue;
       }
       emittedIds.add(canonicalId);
-      normalizedRows.push({ ...row, id: canonicalId });
+      normalizedRows.push({ ...remapPath(row), id: canonicalId });
     }
     return normalizedRows;
+  }
+  if (tableName === "workout_routine_templates") {
+    return rows.map((row) => ({
+      ...remapPath(row),
+      id: remap(canonicalIds.workoutRoutineIds, row.id),
+      mark_template_id: remap(canonicalIds.markTemplateIds, row.mark_template_id),
+    }));
   }
   if (tableName === "routine_exercise_templates") {
     return rows.map((row) => ({
       ...row,
-      exercise_definition_id:
-        canonicalExerciseDefinitionIds.get(String(row.exercise_definition_id)) ?? String(row.exercise_definition_id),
+      workout_routine_template_id: remap(canonicalIds.workoutRoutineIds, row.workout_routine_template_id),
+      exercise_definition_id: remap(canonicalIds.exerciseDefinitionIds, row.exercise_definition_id),
     }));
   }
   return rows;
+}
+
+function buildRoutineCatalogSelection(database, exactTitle) {
+  const routines = database
+    .prepare("SELECT id, mark_template_id FROM workout_routine_templates WHERE title = ? AND deleted_at IS NULL;")
+    .all(exactTitle);
+  if (routines.length !== 1) {
+    throw new Error(`Expected one active workspace routine titled ${exactTitle}; found ${routines.length}.`);
+  }
+  const routine = routines[0];
+  const routineExerciseRows = database
+    .prepare("SELECT id, exercise_definition_id FROM routine_exercise_templates WHERE workout_routine_template_id = ? AND deleted_at IS NULL;")
+    .all(routine.id);
+  return new Map([
+    ["mark_templates", new Set(routine.mark_template_id == null ? [] : [String(routine.mark_template_id)])],
+    ["pack_check_templates", new Set()],
+    ["pack_check_item_templates", new Set()],
+    ["mark_pack_check_rules", new Set()],
+    ["exercise_definitions", new Set(routineExerciseRows.map((row) => String(row.exercise_definition_id)))],
+    ["workout_routine_templates", new Set([String(routine.id)])],
+    ["routine_exercise_templates", new Set(routineExerciseRows.map((row) => String(row.id)))],
+  ]);
+}
+
+function identityKey(...parts) {
+  return parts.map(normalizeIdentity).join("\u0000");
+}
+
+function normalizeIdentity(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+}
+
+function stableJsonIdentity(value) {
+  if (value == null || value === "") return "";
+  try {
+    return JSON.stringify(sortJsonValue(typeof value === "string" ? JSON.parse(value) : value));
+  } catch {
+    return normalizeIdentity(value);
+  }
+}
+
+function sortJsonValue(value) {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortJsonValue(value[key])]));
+}
+
+function applyExplicitMarkTemplateBindings(localRows, remoteRows, result) {
+  const bindingsPath = path.resolve(
+    process.cwd(),
+    "ai-resources",
+    "Waymark DB sources",
+    "catalog",
+    "catalog-id-bindings.json",
+  );
+  if (!fs.existsSync(bindingsPath)) return;
+  const bindings = JSON.parse(fs.readFileSync(bindingsPath, "utf8")).markTemplates ?? {};
+  const remoteById = new Map(remoteRows.map((row) => [String(row.id), row]));
+  for (const row of localRows) {
+    const canonicalId = bindings[String(row.title)];
+    if (!canonicalId) continue;
+    const remote = remoteById.get(String(canonicalId));
+    if (!remote) {
+      throw new Error(`Explicit Turso mark-template binding ${row.title} -> ${canonicalId} does not exist.`);
+    }
+    if (normalizeIdentity(remote.title) !== normalizeIdentity(row.title)) {
+      throw new Error(`Explicit Turso mark-template binding ${canonicalId} is titled ${String(remote.title)}, not ${String(row.title)}.`);
+    }
+    result.set(String(row.id), String(canonicalId));
+  }
 }
 
 async function uploadWeekPlans({ database, adapter, vaultId, deviceId }) {

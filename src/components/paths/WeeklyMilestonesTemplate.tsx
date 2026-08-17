@@ -465,6 +465,7 @@ function WeeklyMilestoneMarkRow({
   mark: WeeklyMilestoneMarkItem;
   onOpenMark?: (milestone: WeeklyMilestoneItem, mark: WeeklyMilestoneMarkItem) => void;
 }) {
+  const final = mark.isFinal;
   return (
     <Pressable
       accessibilityLabel={`${mark.dayLabel} ${mark.title}`}
@@ -473,10 +474,10 @@ function WeeklyMilestoneMarkRow({
       onPress={() => onOpenMark?.(milestone, mark)}
       style={({ pressed }) => [styles.markRow, pressed ? styles.markRowPressed : null]}
     >
-      <WMText numberOfLines={1} style={[styles.markDay, { color: milestone.pathAccentDeep }, mark.isDone ? styles.markDayDone : null]} variant="metaCompact">
+      <WMText numberOfLines={1} style={[styles.markDay, { color: milestone.pathAccentDeep }, final ? styles.markDayDone : null]} variant="metaCompact">
         {mark.dayLabel}
       </WMText>
-      <WMText numberOfLines={1} style={[styles.markTitle, mark.isDone ? styles.markTitleDone : null]} variant="body">
+      <WMText numberOfLines={1} style={[styles.markTitle, final ? styles.markTitleDone : null]} variant="body">
         {mark.title}
       </WMText>
     </Pressable>

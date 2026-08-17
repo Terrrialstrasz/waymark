@@ -10,10 +10,12 @@ import {
   WAYMARK_TURSO_PROTECTED_CANONICAL_TABLES,
   canMigrateLocalRowsIntoTursoTable,
   canWaymarkMutateFullDbField,
+  enforceTursoCanonicalWorkspaceCache,
   getWaymarkFullDbTableSpec,
   isWaymarkFullDbLocalOnlyColumn,
   pullWaymarkFullDatabaseChanges,
   pullWaymarkFullDatabaseSnapshot,
+  WaymarkTursoFullDatabaseRemoteAdapter,
   type WaymarkFullDbChange,
 } from "../src/lib/waymark";
 
@@ -62,24 +64,26 @@ async function run() {
   const contractTables = WAYMARK_TURSO_FULL_DB_TABLES.map((spec) => spec.tableName).sort();
 
   assert.deepEqual(contractTables, localTables, "Every local Waymark table must have a Full-DB contract entry.");
-  assert.deepEqual([...WAYMARK_TURSO_PROTECTED_CANONICAL_TABLES].sort(), ["expeditions", "mark_instances", "paths"]);
-  assert.deepEqual(
-    WAYMARK_TURSO_FULL_DB_TABLES.filter((spec) => spec.migrationMode === "preserve_remote").map((spec) => spec.tableName).sort(),
-    ["expeditions", "mark_instances", "paths"],
-    "Only the three approved live Turso tables may bypass export migration",
-  );
+  assert.equal(WAYMARK_TURSO_PROTECTED_CANONICAL_TABLES.includes("mark_templates"), true);
+  assert.equal(WAYMARK_TURSO_PROTECTED_CANONICAL_TABLES.includes("workout_routine_templates"), true);
+  assert.equal(WAYMARK_TURSO_PROTECTED_CANONICAL_TABLES.includes("week_plan_items"), true);
   assert.equal(canMigrateLocalRowsIntoTursoTable("paths"), false);
   assert.equal(canMigrateLocalRowsIntoTursoTable("expeditions"), false);
   assert.equal(canMigrateLocalRowsIntoTursoTable("mark_instances"), false);
-  assert.equal(canMigrateLocalRowsIntoTursoTable("memories"), true);
+  assert.equal(canMigrateLocalRowsIntoTursoTable("memories"), false);
   assert.equal(canMigrateLocalRowsIntoTursoTable("unknown_table"), false);
-  assert.equal(getWaymarkFullDbTableSpec("memories")?.source, "local_export_seed");
-  assert.equal(getWaymarkFullDbTableSpec("week_plan_items")?.source, "workspace_publish");
+  assert.equal(getWaymarkFullDbTableSpec("memories")?.source, "remote_current");
+  assert.equal(getWaymarkFullDbTableSpec("week_plan_items")?.source, "remote_current");
   assert.equal(canWaymarkMutateFullDbField("paths", "title"), false);
   assert.equal(canWaymarkMutateFullDbField("expeditions", "status"), true);
   assert.equal(canWaymarkMutateFullDbField("expeditions", "title"), false);
   assert.equal(canWaymarkMutateFullDbField("mark_instances", "status"), true);
   assert.equal(canWaymarkMutateFullDbField("mark_instances", "path_id"), false);
+  assert.deepEqual(
+    WAYMARK_TURSO_FULL_DB_TABLES.filter((spec) => spec.mobileCreateAllowed).map((spec) => spec.tableName).sort(),
+    ["backlog_items", "mark_instances", "memories", "trail_days"],
+    "Waymark runtime may create only Backlog, Mark, Memory, and Trail Day entities.",
+  );
   assert.equal(isWaymarkFullDbLocalOnlyColumn("sync_status"), true);
   assert.equal(isWaymarkFullDbLocalOnlyColumn("local_revision"), true);
   assert.equal(isWaymarkFullDbLocalOnlyColumn("updated_at"), false);
@@ -140,7 +144,24 @@ async function run() {
       id, user_id, display_name, locale, timezone, week_starts_on,
       created_at, updated_at, sync_status, local_revision
     ) VALUES ('profile_test', 'user_test', 'Local', 'vi', 'Asia/Saigon', 1, 1, 1, 'local', 1);
+    INSERT INTO paths (
+      id, user_id, name, slug, title, status, sort_order,
+      created_at, updated_at, sync_status, local_revision
+    ) VALUES ('path_remote', 'user_test', 'Local Path', 'remote-path', 'Local Path', 'active', 0, 1, 1, 'local', 1);
+    INSERT INTO mark_templates (
+      id, user_id, path_id, title, template_type, recurrence_type,
+      recurrence_rule_json, is_active, created_at, updated_at, sync_status, local_revision
+    ) VALUES (
+      'template_local_bootstrap', 'user_test', 'path_remote', 'Locally bootstrapped template', 'workout', 'none',
+      '{}', 1, 1, 1, 'local', 1
+    );
   `);
+  await enforceTursoCanonicalWorkspaceCache({ database: localAdapter as any, now: 9 });
+  assert.deepEqual(
+    { ...local.prepare("SELECT is_active, deleted_at FROM mark_templates WHERE id = 'template_local_bootstrap';").get() },
+    { is_active: 0, deleted_at: 9 },
+    "App startup must disable a catalog row that was not pulled from Turso.",
+  );
   const snapshotAdapter = {
     async getSchemaState() {
       return { schemaVersion: 1, migrationMode: "active" as const };
@@ -245,6 +266,11 @@ async function run() {
     { ...local.prepare("SELECT sync_status, local_revision FROM mark_templates WHERE id = 'template_legacy';").get() },
     { sync_status: "synced", local_revision: 5 },
   );
+  assert.deepEqual(
+    { ...local.prepare("SELECT is_active, deleted_at FROM mark_templates WHERE id = 'template_local_bootstrap';").get() },
+    { is_active: 0, deleted_at: 9 },
+    "Full Turso snapshot must deactivate a legacy local catalog row whose ID is absent remotely.",
+  );
   assert.equal(local.prepare("SELECT last_cloud_revision FROM sync_state WHERE vault_id = 'vault_test';").get()?.last_cloud_revision, 7);
 
   const incrementalChanges: WaymarkFullDbChange[] = [
@@ -308,6 +334,86 @@ async function run() {
   assert.equal(local.prepare("SELECT COUNT(*) AS count FROM app_settings WHERE id = 'setting_other';").get()?.count, 0);
   assert.equal(local.prepare("SELECT last_cloud_revision FROM sync_state WHERE vault_id = 'vault_test';").get()?.last_cloud_revision, 9);
 
+  local.exec(`
+    INSERT INTO trail_days (
+      id, user_id, local_date, status, created_at, updated_at, sync_status, local_revision
+    ) VALUES ('trail_dirty_mark', 'user_test', '2026-08-13', 'open', 1, 1, 'synced', 1);
+    INSERT INTO mark_instances (
+      id, user_id, path_id, trail_day_id, title, origin, status,
+      created_at, updated_at, sync_status, local_revision
+    ) VALUES (
+      'mark_dirty_activity', 'user_test', 'path_remote', 'trail_dirty_mark',
+      'Local workout title', 'weekly_planned', 'active', 1, 20, 'dirty', 3
+    );
+    INSERT INTO sync_outbox (
+      id, vault_id, device_id, db_instance_id, source_application_id,
+      entity_type, entity_id, operation, idempotency_key, local_revision,
+      payload_json, status, retry_count, created_at, updated_at
+    ) VALUES (
+      'outbox_dirty_mark', 'vault_test', 'device_test', 'db_test', 'com.waymark.lifeos',
+      'mark_instance', 'mark_dirty_activity', 'update', 'dirty-mark-update-3', 3,
+      '{"id":"mark_dirty_activity","status":"active"}', 'pending', 0, 20, 20
+    );
+  `);
+  await pullWaymarkFullDatabaseChanges({
+    database: localAdapter as any,
+    adapter: {
+      ...snapshotAdapter,
+      async getChangeCeiling() {
+        return 10;
+      },
+      async listChanges() {
+        return [{
+          globalRevision: 10,
+          tableName: "mark_instances",
+          deviceId: null,
+          rowKey: "mark_dirty_activity",
+          operation: "update" as const,
+          entityRevision: 10,
+          payload: {
+            id: "mark_dirty_activity",
+            user_id: "user_test",
+            path_id: "path_remote",
+            trail_day_id: "trail_dirty_mark",
+            template_id: null,
+            title: "Remote canonical workout title",
+            description: null,
+            origin: "weekly_planned",
+            status: "planned",
+            completed_at: null,
+            skipped_at: null,
+            expired_at: null,
+            proof_note: null,
+            completion_summary: null,
+            substituted_by_mark_id: null,
+            rescheduled_to_mark_id: null,
+            created_at: 1,
+            updated_at: 10,
+            deleted_at: null,
+            _remote_entity_revision: 10,
+          },
+          mutationId: "workspace_mark_10",
+          changedAt: 10,
+        }];
+      },
+    },
+    vaultId: "vault_test",
+    deviceId: "device_test",
+    now: 21,
+  });
+  assert.deepEqual(
+    { ...local.prepare("SELECT title, status, updated_at, sync_status, local_revision FROM mark_instances WHERE id = 'mark_dirty_activity';").get() },
+    {
+      title: "Remote canonical workout title",
+      status: "active",
+      updated_at: 20,
+      sync_status: "dirty",
+      local_revision: 3,
+    },
+    "A Turso pull may refresh canonical structure but must preserve pending local Mark activity fields.",
+  );
+  assert.equal(local.prepare("SELECT status FROM sync_outbox WHERE id = 'outbox_dirty_mark';").get()?.status, "pending");
+
   const identityLocal = new DatabaseSync(":memory:");
   const identityAdapter = new NodeSqliteAdapter(identityLocal);
   await applyMigrationsAsync(identityAdapter as any);
@@ -335,6 +441,15 @@ async function run() {
       id, user_id, target_type, target_id, scheduled_at, status,
       created_at, updated_at, sync_status, local_revision
     ) VALUES ('signal_local_pack', 'user_test', 'pack_check_instance', 'pack_local', 10, 'scheduled', 3, 3, 'dirty', 1);
+    INSERT INTO sync_outbox (
+      id, vault_id, device_id, db_instance_id, source_application_id,
+      entity_type, entity_id, operation, idempotency_key, local_revision,
+      payload_json, status, retry_count, created_at, updated_at
+    ) VALUES (
+      'outbox_pack_local', 'vault_identity', 'device_identity', 'db_identity', 'com.waymark.lifeos',
+      'pack_check_instance', 'pack_local', 'update', 'pack-local-update-1', 1,
+      '{"id":"pack_local"}', 'failed', 1, 3, 3
+    );
   `);
   const identitySnapshotAdapter = {
     async getSchemaState() {
@@ -416,6 +531,10 @@ async function run() {
   assert.equal(
     identityLocal.prepare("SELECT target_id FROM signals WHERE id = 'signal_local_pack';").get()?.target_id,
     "pack_remote",
+  );
+  assert.deepEqual(
+    { ...identityLocal.prepare("SELECT status, error_kind, canonical_entity_id FROM sync_outbox WHERE id = 'outbox_pack_local';").get() },
+    { status: "superseded", error_kind: "superseded", canonical_entity_id: "pack_remote" },
   );
   identityLocal.close();
 
@@ -518,6 +637,115 @@ async function run() {
   assert.equal(rollbackLocal.prepare("SELECT COUNT(*) AS count FROM mark_templates WHERE id = 'template_invalid';").get()?.count, 0);
   assert.equal(rollbackLocal.prepare("SELECT COUNT(*) AS count FROM sync_state WHERE vault_id = 'vault_rollback';").get()?.count, 0);
   rollbackLocal.close();
+
+  const cleanedMutationIds: string[] = [];
+  let remoteMemory: Record<string, unknown> | null = {
+    id: "memory_dev",
+    vault_id: "vault_test",
+    title: "Changed by Dev",
+    _remote_last_mutation_id: "mutation_update",
+  };
+  const pragmaResult = (names: Array<[string, number]>) => ({
+    columns: ["name", "notnull", "pk"],
+    rows: names.map(([name, pk]) => ({ name, notnull: 0, pk })),
+  });
+  const cleanupClient = {
+    async execute(statement: string | { sql: string; args?: unknown[] }) {
+      const sql = typeof statement === "string" ? statement : statement.sql;
+      if (sql.includes('PRAGMA table_info("waymark_full_db_idempotency")')) {
+        return pragmaResult([
+          ["mutation_id", 1],
+          ["source_application_id", 0],
+          ["cleaned_at", 0],
+        ]);
+      }
+      if (sql.includes('PRAGMA table_info("waymark_full_db_change_log")')) {
+        return pragmaResult([
+          ["mutation_id", 0],
+          ["source_application_id", 0],
+          ["before_payload_snapshot", 0],
+        ]);
+      }
+      if (sql.includes('PRAGMA table_info("memories")')) {
+        return pragmaResult([
+          ["id", 1],
+          ["vault_id", 0],
+          ["title", 0],
+          ["_remote_last_mutation_id", 0],
+        ]);
+      }
+      if (sql.includes("FROM waymark_full_db_idempotency i")) {
+        assert.deepEqual((statement as { args: unknown[] }).args.slice(0, 2), ["vault_test", "com.waymark.lifeos.dev"]);
+        return {
+          columns: ["mutation_id", "table_name", "row_key", "operation", "before_payload_snapshot"],
+          rows: [
+            {
+              mutation_id: "mutation_update",
+              table_name: "memories",
+              row_key: "memory_dev",
+              operation: "update",
+              before_payload_snapshot: JSON.stringify({
+                id: "memory_dev",
+                vault_id: "vault_test",
+                title: "Created by Dev",
+                _remote_last_mutation_id: "mutation_create",
+              }),
+            },
+            {
+              mutation_id: "mutation_create",
+              table_name: "memories",
+              row_key: "memory_dev",
+              operation: "create",
+              before_payload_snapshot: null,
+            },
+          ],
+        };
+      }
+      return { columns: [], rows: [], rowsAffected: 0 };
+    },
+    async transaction() {
+      return {
+        async execute(statement: { sql: string; args?: unknown[] }) {
+          if (statement.sql.includes('SELECT * FROM "memories"')) {
+            return {
+              columns: ["id", "vault_id", "title", "_remote_last_mutation_id"],
+              rows: remoteMemory ? [{ ...remoteMemory }] : [],
+            };
+          }
+          if (statement.sql.startsWith('UPDATE "memories"')) {
+            remoteMemory = {
+              id: "memory_dev",
+              vault_id: "vault_test",
+              title: "Created by Dev",
+              _remote_last_mutation_id: "mutation_create",
+            };
+            return { columns: [], rows: [], rowsAffected: 1 };
+          }
+          if (statement.sql.startsWith('DELETE FROM "memories"')) {
+            remoteMemory = null;
+            return { columns: [], rows: [], rowsAffected: 1 };
+          }
+          if (statement.sql.includes("SET cleaned_at = ?")) {
+            cleanedMutationIds.push(String(statement.args?.[1]));
+            return { columns: [], rows: [], rowsAffected: 1 };
+          }
+          return { columns: [], rows: [], rowsAffected: 0 };
+        },
+        async commit() {},
+        async rollback() {},
+        close() {},
+      };
+    },
+  };
+  const cleanupAdapter = new WaymarkTursoFullDatabaseRemoteAdapter(cleanupClient as any);
+  const cleanupResult = await cleanupAdapter.cleanupApplicationMutations({
+    vaultId: "vault_test",
+    applicationId: "com.waymark.lifeos.dev",
+  });
+  assert.equal(cleanupResult.reverted, 2);
+  assert.deepEqual(cleanupResult.conflicts, []);
+  assert.deepEqual(cleanedMutationIds, ["mutation_update", "mutation_create"]);
+  assert.equal(remoteMemory, null, "Dev update must be restored before the Dev-created row is removed.");
 
   local.close();
   remoteControl.close();

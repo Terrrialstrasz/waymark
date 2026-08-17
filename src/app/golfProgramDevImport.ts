@@ -1,5 +1,6 @@
 import type { WaymarkRepositories } from "../domain/waymark";
-import { bootstrapWaymarkMap, importWeeklyTimetable, type WeeklyTimetableImportReport, type WeeklyTimetableImportSlotInput } from "../lib/waymark";
+import { importWeeklyTimetable, type WeeklyTimetableImportReport, type WeeklyTimetableImportSlotInput } from "../lib/waymark/weeklyTimetableImport";
+import { bootstrapWaymarkMap } from "../waymark-map/bootstrap";
 import { GOLF_PROGRAM_WEEKS } from "../config/golfProgramCatalog";
 import { getWaymarkHierarchyBinding } from "../config/waymarkHierarchyBindings";
 import { WAYMARK_MAP_CONFIG } from "../waymark-map";

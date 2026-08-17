@@ -557,22 +557,22 @@ function PathMilestoneMarkRow({
   onOpenMark?: (item: PathDetailMarkItem) => void;
 }) {
   const interactive = Boolean(onOpenMark);
-  const done = mark.isDone;
+  const final = mark.isFinal;
   return (
     <Pressable
       accessibilityLabel={locale === "vi" ? `Mo mark ${mark.title}` : `Open mark ${mark.title}`}
       accessibilityRole={interactive ? "button" : "text"}
       disabled={!interactive}
       onPress={() => onOpenMark?.(mark)}
-      style={({ pressed }) => [styles.pathMarkRow, done ? styles.pathMarkRowDone : null, pressed ? styles.pathMarkRowPressed : null]}
+      style={({ pressed }) => [styles.pathMarkRow, final ? styles.pathMarkRowDone : null, pressed ? styles.pathMarkRowPressed : null]}
     >
-      <WMText numberOfLines={1} style={[styles.pathMarkTime, done ? styles.pathMarkMetaDone : null]} variant="metaCompact">
+      <WMText numberOfLines={1} style={[styles.pathMarkTime, final ? styles.pathMarkMetaDone : null]} variant="metaCompact">
         {formatMarkTime(mark, locale)}
       </WMText>
-      <WMText numberOfLines={2} style={[styles.pathMarkTitle, done ? styles.pathMarkTitleDone : null]} variant="bodySm">
+      <WMText numberOfLines={2} style={[styles.pathMarkTitle, final ? styles.pathMarkTitleDone : null]} variant="bodySm">
         {mark.title}
       </WMText>
-      <WMText numberOfLines={1} style={[styles.pathMarkStatus, done ? styles.pathMarkMetaDone : null]} variant="metaCompact">
+      <WMText numberOfLines={1} style={[styles.pathMarkStatus, final ? styles.pathMarkMetaDone : null]} variant="metaCompact">
         {markStatusLabel(mark.status, locale)}
       </WMText>
     </Pressable>

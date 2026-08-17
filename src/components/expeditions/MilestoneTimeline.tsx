@@ -9,6 +9,7 @@ import { foundationColors, semanticRadius, spacing } from "../../theme/tokens";
 import { getCopy } from "../../i18n/copy";
 import { WaymarkIcon } from "../primitives/WaymarkIcon";
 import { formatMilestoneMarkCount, getStatusLabel } from "./detailModel";
+import { isFinalMarkInstanceStatus } from "../../domain/waymark/markStatus";
 
 type Props = {
   milestones: ExpeditionMilestoneItem[];
@@ -279,7 +280,7 @@ function ExpeditionPathStyleMarkRow({
   mark: ExpeditionPlannedMarkItem;
   onOpenMarkDetail?: (markId: string) => void;
 }) {
-  const done = isDoneMark(mark);
+  const final = isFinalMark(mark);
   const interactive = Boolean(onOpenMarkDetail);
 
   return (
@@ -287,15 +288,15 @@ function ExpeditionPathStyleMarkRow({
       accessibilityRole={interactive ? "button" : "text"}
       disabled={!interactive}
       onPress={() => onOpenMarkDetail?.(mark.id)}
-      style={({ pressed }) => [styles.markRow, done ? styles.markRowDone : null, pressed ? styles.markRowPressed : null]}
+      style={({ pressed }) => [styles.markRow, final ? styles.markRowDone : null, pressed ? styles.markRowPressed : null]}
     >
-      <WMText numberOfLines={1} style={[styles.markTime, done ? styles.markMetaDone : null]} variant="metaCompact">
+      <WMText numberOfLines={1} style={[styles.markTime, final ? styles.markMetaDone : null]} variant="metaCompact">
         {formatMarkTiming(mark)}
       </WMText>
-      <WMText numberOfLines={2} style={[styles.markTitle, done ? styles.markTitleDone : null]} variant="bodySm">
+      <WMText numberOfLines={2} style={[styles.markTitle, final ? styles.markTitleDone : null]} variant="bodySm">
         {mark.title}
       </WMText>
-      <WMText numberOfLines={1} style={[styles.markStatus, done ? styles.markMetaDone : null]} variant="metaCompact">
+      <WMText numberOfLines={1} style={[styles.markStatus, final ? styles.markMetaDone : null]} variant="metaCompact">
         {getStatusLabel(mark.status, locale)}
       </WMText>
     </Pressable>
@@ -317,8 +318,8 @@ function sortExpeditionMarks(marks: ExpeditionPlannedMarkItem[]) {
   });
 }
 
-function isDoneMark(mark: ExpeditionPlannedMarkItem) {
-  return mark.status === "completed";
+function isFinalMark(mark: ExpeditionPlannedMarkItem) {
+  return isFinalMarkInstanceStatus(mark.status);
 }
 
 function getMarkSortTime(mark: ExpeditionPlannedMarkItem) {

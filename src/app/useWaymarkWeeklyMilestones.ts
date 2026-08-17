@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { MarkInstance, Milestone } from "../domain/waymark";
-import { ExpeditionStatus, MarkInstanceStatus, MilestoneStatus, WeekPlanItemStatus } from "../domain/waymark";
+import { ExpeditionStatus, isFinalMarkInstanceStatus, MarkInstanceStatus, MilestoneStatus, WeekPlanItemStatus } from "../domain/waymark";
 import type { WeeklyMilestoneItem, WeeklyMilestoneMarkItem } from "../components/paths/types";
 import type { Locale } from "../types/ui";
 import { todayPathHeroPaths } from "../lib/waymark/todayPathHero";
@@ -270,6 +270,7 @@ function mapWeeklyMilestoneMark(mark: MarkInstance, localDate: string): WeeklyMi
     localDate,
     dayLabel: formatWeekdayShortLabel(localDate),
     isDone: mark.status === MarkInstanceStatus.Completed,
+    isFinal: isFinalMarkInstanceStatus(mark.status),
     expeditionTitle: undefined,
     milestoneTitle: undefined,
     description: mark.description,

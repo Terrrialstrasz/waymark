@@ -9,7 +9,7 @@ import {
   SignalTargetType,
 } from "../domain/waymark/enums";
 import type { SignalEngine } from "../domain/waymark/services";
-import { importWeeklyTimetable, type WeeklyTimetableImportReport, type WeeklyTimetableImportSlotInput } from "../lib/waymark";
+import { importWeeklyTimetable, type WeeklyTimetableImportReport, type WeeklyTimetableImportSlotInput } from "../lib/waymark/weeklyTimetableImport";
 import { setMarkTemplateSeedMetadata } from "../lib/waymark/markTemplateSeedStore";
 import { recomputeTrailDayCountersForDate } from "../lib/waymark/plannedMarkSourceOfTruth";
 import { findSeedRecordBySource } from "../waymark-map/seedRegistry";

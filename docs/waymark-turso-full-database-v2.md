@@ -10,6 +10,8 @@
 
 Waymark replaces the generic projection/partial typed-sync topology with one typed Full-DB topology in the existing Turso database. All current SQLite tables have an explicit Turso table contract. `paths`, `expeditions`, and `mark_instances` retain their current remote rows as protected migration baselines; all remaining tables are added or seeded in place.
 
+For mobile runtime, every catalog and weekly-planning ID pulled from Turso is canonical. Catalog/planning publication belongs exclusively to one-run workspace scripts and is not bundled into Waymark. Mobile may create only Memories, Marks, and Backlog items, and may change only the status of Expeditions, Milestones, and Marks among workspace-owned entities.
+
 ## Control plane
 
 Full-DB v2 adds schema metadata, migration manifests, mutation idempotency, a global revision change log, snapshot metadata and device cursors. Activation is gated by migration verification. Legacy generic projection tables may remain temporarily for rollback evidence but are no longer the v2 read/write path.

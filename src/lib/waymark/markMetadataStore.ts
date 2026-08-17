@@ -77,3 +77,23 @@ export function copyMarkExecutionPresentationMetadata(
     milestoneSourceSeedId: source?.milestoneSourceSeedId,
   };
 }
+
+export function copyMarkSubstitutionPresentationMetadata(
+  source: MarkMetadata | null,
+  substituteMarkId: string,
+  preserveWorkoutFlow = false,
+): MarkMetadata {
+  return {
+    markId: substituteMarkId,
+    sourceKind: source?.sourceKind,
+    appearsInToday: source?.appearsInToday,
+    appearsInPathProof: source?.appearsInPathProof,
+    appearsInJournal: source?.appearsInJournal,
+    countsAsPathProof: source?.countsAsPathProof,
+    orderIndex: source?.orderIndex,
+    blockType: preserveWorkoutFlow ? "workout_block" : source?.blockType === "workout_block" ? undefined : source?.blockType,
+    taskKind: source?.taskKind,
+    requiresText: source?.requiresText,
+    milestoneSourceSeedId: source?.milestoneSourceSeedId,
+  };
+}

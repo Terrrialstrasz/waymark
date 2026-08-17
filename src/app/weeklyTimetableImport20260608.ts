@@ -1,8 +1,8 @@
 import type { MarkInstance, PackCheckInstance, Signal, WaymarkRepositories } from "../domain/waymark";
 import { PackCheckInstanceStatus, SignalStatus, SignalTargetType } from "../domain/waymark/enums";
 import type { PackCheckEngine, SignalEngine } from "../domain/waymark/services";
-import { bootstrapWaymarkMap } from "../lib/waymark";
-import { importWeeklyTimetable, type WeeklyTimetableImportReport, type WeeklyTimetableImportSlotInput } from "../lib/waymark";
+import { importWeeklyTimetable, type WeeklyTimetableImportReport, type WeeklyTimetableImportSlotInput } from "../lib/waymark/weeklyTimetableImport";
+import { bootstrapWaymarkMap } from "../waymark-map/bootstrap";
 import { WAYMARK_MAP_CONFIG } from "../waymark-map";
 import { findSeedRecordBySource } from "../waymark-map/seedRegistry";
 import { buildZonedDateTime } from "./waymarkUi";

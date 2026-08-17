@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const compiledRoot = path.resolve(process.cwd(), ".tmp/repo-tests/src/lib/waymark");
+const EXECUTION_BLOCK_KEYS = new Set(["workout", "golf_swing", "golf_putt"]);
 
 if (!fs.existsSync(path.join(compiledRoot, "tursoRemoteAdapter.js"))) {
   throw new Error("Compiled repository files are missing. Run `npx tsc -p tsconfig.repo-tests.json` first.");
@@ -79,6 +80,7 @@ const client = createWaymarkTursoClient({ url, authToken });
 try {
   const adapter = new WaymarkTursoRemoteAdapter(client);
   await adapter.ensureSchema();
+  await validateRemoteTemplateBindings({ client, vaultId, items: itemSnapshots });
 
   await uploadSnapshots({
     label: "paths",
@@ -314,7 +316,35 @@ function validateWeeklyPlan({ paths, expeditions, milestones, plan, items }) {
     if (item.milestoneId && milestoneIds.size > 0 && !milestoneIds.has(item.milestoneId)) {
       throw new Error(`Item ${item.id} references milestone ${item.milestoneId}, which is not in artifact milestones.`);
     }
+    if (isExecutionItem(item) && !item.templateId) {
+      throw new Error(
+        `Execution item ${item.id} (${item.blockKey}: ${item.title ?? "untitled"}) must provide templateId.`,
+      );
+    }
   }
+}
+
+async function validateRemoteTemplateBindings({ client, vaultId, items }) {
+  const requiredTemplateIds = [...new Set(items.filter(isExecutionItem).map((item) => item.templateId))];
+  if (requiredTemplateIds.length === 0) {
+    return;
+  }
+  const placeholders = requiredTemplateIds.map(() => "?").join(", ");
+  const result = await client.execute({
+    sql: `SELECT id FROM mark_templates
+      WHERE vault_id = ? AND deleted_at IS NULL AND is_active = 1
+        AND id IN (${placeholders});`,
+    args: [vaultId, ...requiredTemplateIds],
+  });
+  const existingIds = new Set(result.rows.map((row) => String(row[0])));
+  const missingIds = requiredTemplateIds.filter((id) => !existingIds.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(`Execution templateIds are missing or inactive on Turso: ${missingIds.join(", ")}.`);
+  }
+}
+
+function isExecutionItem(item) {
+  return EXECUTION_BLOCK_KEYS.has(String(item.blockKey ?? "").trim().toLowerCase());
 }
 
 function assertUniqueIds(label, items) {

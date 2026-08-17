@@ -1,7 +1,4 @@
 import type { SQLiteQueryable, SQLiteTransactionalDatabase } from "../../db/adapters/SQLiteRepositoryBase";
-import type { WaymarkRepositories } from "../../domain/waymark";
-import { reconcilePulledHierarchySeedRegistry } from "../../waymark-map/bootstrap";
-import type { WaymarkMapConfig } from "../../waymark-map/types";
 import {
   pullWaymarkFullDatabaseChanges,
   pullWaymarkFullDatabaseSnapshot,
@@ -18,7 +15,7 @@ import {
 } from "./tursoPlanningSync";
 
 export type WaymarkTursoPullMode = "full" | "planning" | "hierarchy";
-export type WaymarkTursoPullStage = "full_database" | "typed_planning" | "hierarchy_reconciliation" | "local_materialization";
+export type WaymarkTursoPullStage = "full_database" | "typed_planning" | "local_materialization";
 
 type CoordinatorBase = {
   database: SQLiteTransactionalDatabase;
@@ -29,16 +26,10 @@ type CoordinatorBase = {
   now?: number;
 };
 
-type HierarchyContext = {
-  repositories: WaymarkRepositories;
-  userId: string;
-  mapConfig: WaymarkMapConfig;
-};
-
 export type RunWaymarkTursoPullInput = CoordinatorBase &
   (
-    | ({ mode: "full"; fullDbMode: "snapshot" | "incremental"; fullDbAdapter: FullDbPullAdapter } & HierarchyContext)
-    | ({ mode: "hierarchy" } & HierarchyContext)
+    | { mode: "full"; fullDbMode: "snapshot" | "incremental"; fullDbAdapter: FullDbPullAdapter }
+    | { mode: "hierarchy" }
     | { mode: "planning" }
   );
 
@@ -47,7 +38,6 @@ export type WaymarkTursoPullResult = {
   fullDatabase: WaymarkFullDbPullResult | null;
   planning: PullTypedPlanningFromTursoResult;
   localRepair: ReconcileLocalWeeklyPlanningResult;
-  hierarchyReconciled: boolean;
 };
 
 export class WaymarkTursoPullInProgressError extends Error {
@@ -141,22 +131,11 @@ async function runWaymarkTursoPullUnlocked(input: RunWaymarkTursoPullInput): Pro
     });
   });
 
-  let hierarchyReconciled = false;
-  if (input.mode === "full" || input.mode === "hierarchy") {
-    await runStage("hierarchy_reconciliation", () =>
-      reconcilePulledHierarchySeedRegistry(
-        { repositories: input.repositories, userId: input.userId },
-        input.mapConfig,
-      ),
-    );
-    hierarchyReconciled = true;
-  }
-
   const localRepair = await runStage("local_materialization", () =>
     reconcileLocalWeeklyPlanningMaterialization({ executor, now: input.now }),
   );
 
-  return { mode: input.mode, fullDatabase, planning, localRepair, hierarchyReconciled };
+  return { mode: input.mode, fullDatabase, planning, localRepair };
 }
 
 async function runStage<T>(stage: WaymarkTursoPullStage, task: () => Promise<T>): Promise<T> {

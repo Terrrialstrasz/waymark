@@ -14,58 +14,13 @@ Turso outbound upload is batch-driven, not real-time. Local writes create durabl
 
 Typed Turso planning edits are Manual Pull only. The intake service must capture a revision ceiling and apply accepted changes to local SQLite first. UI screens still render local selectors/view-models and must not subscribe to Turso rows directly.
 
-Every canonical Waymark table must be pushed to Turso eventually. The phased scope below controls implementation order, not final ownership. Weekly timetable and Signals are the first remote-editable group.
+Runtime authority supersedes the historical phased upload scope below:
 
-MVP Turso outbound sync covers:
-
-- `mark_instances`
-- `mark_instance_details`
-- `memories`
-- `media_assets`
-- `trail_days`
-- `week_plans`
-- `week_plan_items`
-- `signals`
-
-Phase 2 sync covers:
-
-- `pack_check_instances`
-- `workout_session_instances`
-- inbound remote edit intake for `week_plans`, `week_plan_items`, and `signals`
-
-Later sync covers:
-
-- `paths`
-- `expeditions`
-- `milestones`
-- `reflection_entries`
-
-Full Turso projection later covers all remaining canonical tables:
-
-- `vaults`
-- `devices`
-- `sync_state`
-- `user_profiles`
-- `app_settings`
-- `backlog_items`
-- `mark_templates`
-- `mark_dependencies`
-- `pack_check_templates`
-- `pack_check_item_templates`
-- `mark_pack_check_rules`
-- `pack_check_item_instances`
-- `daily_media_upload_batches`
-- `exercise_definitions`
-- `workout_routine_templates`
-- `routine_exercise_templates`
-- `session_exercise_snapshots`
-- `exercise_set_logs`
-- `exercise_progress_states`
-
-Local-only technical tables:
-
-- `schema_migrations`
-- local temporary/cache tables if added later
+- Workspace one-run scripts publish catalog/templates and weekly plans directly to Turso.
+- The mobile bundle never seeds, repairs, imports, or publishes catalog/planning entities.
+- Waymark may create only `mark_instances`, `memories`, and `backlog_items`.
+- Waymark may update only `status` on `expeditions`, `milestones`, and `mark_instances` among workspace-owned entities.
+- Local SQLite remains a disposable cache; Turso physical IDs are canonical for every pulled row.
 
 Do not add `planned_marks`, `actual_marks`, or `journal_entries`. The current DB vocabulary is canonical:
 

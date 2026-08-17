@@ -384,6 +384,70 @@ const tests: Array<{ name: string; run: () => Promise<void> }> = [
     },
   },
   {
+    name: "move into an existing target draft merges the incoming weekly root",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const source = await createWeeklyCandidate(harness, "draft-incoming-source", "2026-08-01");
+        const target = await createWeeklyCandidate(harness, "draft-existing-target", "2026-08-02");
+        const dailyPlan = createDailyPlanEngine(harness.repos);
+        await dailyPlan.beginReplan(
+          harness.user.id,
+          "2026-08-02",
+          harness.user.timezone,
+          "2026-08-02T06:00:00.000Z",
+        );
+
+        const moved = await createMarkEngine(harness.repos).rescheduleMarkInstance({
+          markInstanceId: source.mark.id,
+          targetLocalDate: "2026-08-02",
+        });
+
+        const state = await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-02");
+        assert.equal(state?.status, "draft");
+        assert.deepEqual(state?.candidateRootMarkIds, [source.mark.id, target.mark.id].sort());
+        const resolved = await dailyPlan.resolveEffectiveDailyPlan(harness.user.id, "2026-08-02");
+        assert.deepEqual(
+          new Set(resolved.effectiveMarks.map((mark) => mark.id)),
+          new Set([target.mark.id, moved.replacement.id]),
+        );
+      } finally { harness.close(); }
+    },
+  },
+  {
+    name: "move into a confirmed target reopens replan with the incoming weekly root",
+    run: async () => {
+      const harness = await createHarness();
+      try {
+        const source = await createWeeklyCandidate(harness, "confirmed-incoming-source", "2026-08-01");
+        const target = await createWeeklyCandidate(harness, "confirmed-existing-target", "2026-08-02");
+        const dailyPlan = createDailyPlanEngine(harness.repos);
+        await dailyPlan.beginReplan(
+          harness.user.id,
+          "2026-08-02",
+          harness.user.timezone,
+          "2026-08-02T06:00:00.000Z",
+        );
+        await dailyPlan.confirmReplan(harness.user.id, "2026-08-02", "2026-08-02T06:05:00.000Z");
+
+        const moved = await createMarkEngine(harness.repos).rescheduleMarkInstance({
+          markInstanceId: source.mark.id,
+          targetLocalDate: "2026-08-02",
+        });
+
+        const state = await getDailyReplanState(harness.repos.appSettings, harness.user.id, "2026-08-02");
+        assert.equal(state?.status, "draft");
+        assert.deepEqual(state?.candidateRootMarkIds, [source.mark.id, target.mark.id].sort());
+        const resolved = await dailyPlan.resolveEffectiveDailyPlan(harness.user.id, "2026-08-02");
+        assert.equal(resolved.membership, "draft");
+        assert.deepEqual(
+          new Set(resolved.effectiveMarks.map((mark) => mark.id)),
+          new Set([target.mark.id, moved.replacement.id]),
+        );
+      } finally { harness.close(); }
+    },
+  },
+  {
     name: "Aug 4 style replan keeps pre-confirm exclusions out and post-confirm skips in",
     run: async () => {
       const harness = await createHarness();

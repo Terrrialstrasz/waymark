@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { NextMarkItem, PathDetailExpeditionItem, PathDetailItem, PathDetailMarkItem, PathDetailMilestoneItem, PathProofItem } from "../components/paths/types";
 import type { Expedition, MarkInstance, Memory, Milestone, Path } from "../domain/waymark";
 import { ExpeditionStatus, MarkInstanceStatus, MilestoneStatus } from "../domain/waymark/enums";
+import { isFinalMarkInstanceStatus } from "../domain/waymark/markStatus";
 import { getMarkMetadata, listDisciplineProofsByTrailDay, projectCharacterFromRecords } from "../lib/waymark";
 import type { Locale, PathId } from "../types/ui";
 import { useWaymarkApp } from "./WaymarkAppProvider";
@@ -141,7 +142,6 @@ export function useWaymarkPathDetail(locale: Locale, uiPathId: PathId | null) {
     async (milestoneId: string) => {
       await app.repositories.expeditions.updateMilestone(milestoneId, {
         status: MilestoneStatus.Completed,
-        completedAt: new Date().toISOString(),
       });
       refresh();
     },
@@ -152,7 +152,6 @@ export function useWaymarkPathDetail(locale: Locale, uiPathId: PathId | null) {
     async (milestoneId: string) => {
       await app.repositories.expeditions.updateMilestone(milestoneId, {
         status: MilestoneStatus.Archived,
-        completedAt: null,
       });
       refresh();
     },
@@ -161,18 +160,12 @@ export function useWaymarkPathDetail(locale: Locale, uiPathId: PathId | null) {
 
   const rescheduleMilestone = useCallback(
     async (milestoneId: string) => {
-      const milestone = state.data.expeditions.flatMap((expedition) => expedition.milestones).find((item) => item.id === milestoneId);
-      const currentStartDate = milestone?.startDate;
-      const currentTargetDate = milestone?.targetDate ?? formatLocalDate(new Date(), app.user.timezone);
       await app.repositories.expeditions.updateMilestone(milestoneId, {
         status: MilestoneStatus.Active,
-        startDate: currentStartDate ? shiftLocalDate(currentStartDate, 7) : undefined,
-        targetDate: shiftLocalDate(currentTargetDate, 7),
-        completedAt: null,
       });
       refresh();
     },
-    [app.repositories.expeditions, app.user.timezone, refresh, state.data.expeditions],
+    [app.repositories.expeditions, refresh],
   );
 
   return {
@@ -292,7 +285,7 @@ function mapPathDetailMarkItem(mark: MarkInstance): PathDetailMarkItem {
     createdAt: mark.createdAt,
     sortTime,
     isDone: mark.status === MarkInstanceStatus.Completed,
-    isFinal: isPathDetailMarkFinalStatus(mark.status),
+    isFinal: isFinalMarkInstanceStatus(mark.status),
   };
 }
 
@@ -313,16 +306,4 @@ function comparePathDetailMilestones(left: PathDetailMilestoneItem, right: PathD
 
 function getMilestoneSortDate(milestone: PathDetailMilestoneItem) {
   return milestone.startDate ?? milestone.targetDate ?? "9999-12-31";
-}
-
-function isPathDetailMarkFinalStatus(status: MarkInstanceStatus) {
-  return (
-    status === MarkInstanceStatus.Completed ||
-    status === MarkInstanceStatus.PartiallyCompleted ||
-    status === MarkInstanceStatus.Skipped ||
-    status === MarkInstanceStatus.Rescheduled ||
-    status === MarkInstanceStatus.Substituted ||
-    status === MarkInstanceStatus.Expired ||
-    status === MarkInstanceStatus.Cancelled
-  );
 }

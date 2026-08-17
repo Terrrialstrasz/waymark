@@ -164,6 +164,31 @@ export async function setDailyReplanState(
   return normalized;
 }
 
+export async function includeIncomingDailyReplanRoot(
+  settings: AppSettingsRepository,
+  userId: string,
+  localDate: LocalDateString,
+  rootMarkId: string,
+  changedAt: string,
+): Promise<DailyReplanState | null> {
+  const existing = await getDailyReplanState(settings, userId, localDate);
+  if (!existing) {
+    return null;
+  }
+  if (existing.status === "draft" && existing.candidateRootMarkIds.includes(rootMarkId)) {
+    return existing;
+  }
+  return setDailyReplanState(settings, userId, {
+    schemaVersion: 2,
+    localDate,
+    trailDayId: existing.trailDayId,
+    timezone: existing.timezone,
+    status: "draft",
+    startedAt: existing.status === "confirmed" ? changedAt : existing.startedAt,
+    candidateRootMarkIds: [...existing.candidateRootMarkIds, rootMarkId],
+  });
+}
+
 export async function deleteDailyReplanState(
   settings: AppSettingsRepository,
   userId: string,

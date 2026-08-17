@@ -7,9 +7,6 @@ import type {
 import { ExerciseTargetType, WorkoutExercisePhase, WorkoutRoutineType } from "../domain/waymark/enums";
 import type { Locale } from "../types/ui";
 import type { WaymarkAppServices } from "./WaymarkAppProvider";
-import { repairWorkoutDatabase } from "./repairWorkoutDatabase";
-
-const BODYWEIGHT_REP_PROGRESS_ROUTINE_SEED_ID = "health_bodyweight_rep_progress_routine";
 
 export type WorkoutReviewExercise = {
   id: string;
@@ -40,10 +37,6 @@ export async function loadWorkoutReviewData(
   const mark = await app.repositories.marks.getMarkInstanceById(markId);
   if (!mark) {
     return null;
-  }
-
-  if (normalizeText(mark.title).includes("workout minimal")) {
-    await repairWorkoutDatabase(app.repositories, app.user.id, [BODYWEIGHT_REP_PROGRESS_ROUTINE_SEED_ID]);
   }
 
   const session = await app.repositories.strength.getSessionByMarkInstance(mark.id);
@@ -170,5 +163,7 @@ function isWorkoutMinimalBodyweightRoutine(normalizedMarkTitle: string, routine:
     return false;
   }
   const normalizedRoutineTitle = normalizeText(routine.title);
-  return normalizedRoutineTitle.includes("body weight rep progress") || normalizedRoutineTitle.includes("bodyweight rep progress");
+  return normalizedRoutineTitle.includes("home workout") ||
+    normalizedRoutineTitle.includes("body weight rep progress") ||
+    normalizedRoutineTitle.includes("bodyweight rep progress");
 }

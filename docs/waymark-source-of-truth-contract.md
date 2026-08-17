@@ -25,12 +25,13 @@ Every other local SQLite table is migrated into that same database. Migration us
 | Data family | Authoritative writer | Waymark behavior |
 |---|---|---|
 | Paths | Workspace/admin | Pull and cache; never push from Waymark. |
-| Expedition structure | Workspace/admin | Pull and cache. Waymark may update only approved progress/status fields at EOD. |
-| Existing Marks | Turso baseline | Pull and cache. Waymark may update approved runtime fields and create only rule-authorized Marks at EOD. |
-| Milestone structure | Workspace/admin | Workspace publishes; Waymark may update approved progress/status fields at EOD. |
-| Catalog/templates | Workspace publisher | Pull and cache; mobile does not publish definitions. |
-| Week plans/items | Workspace publisher | Pull and cache; Waymark materializes allowed runtime items locally. |
-| Memories, media metadata, reflections, backlog, signals, pack/workout execution | Waymark through EOD mutation log | Write local cache/outbox first, then push typed mutations at EOD. |
+| Expedition structure | Workspace/admin | Pull and cache. Waymark may update only `status`; it cannot create or restructure Expeditions. |
+| Marks | Turso baseline plus Waymark-authorized creation | Pull and cache. Waymark may create Marks and subsequently update only `status`. |
+| Milestone structure | Workspace/admin | Pull and cache. Waymark may update only `status`; it cannot create or restructure Milestones. |
+| Catalog/templates | Workspace scripts publishing directly to Turso | Pull and cache; mobile never creates, repairs, seeds, or publishes definitions. |
+| Week plans/items | Workspace scripts publishing directly to Turso | Pull and cache; Waymark may materialize Marks but never authors or repairs plan rows. |
+| Memories and Backlog | Waymark through EOD mutation log | Waymark may create and maintain these user-authored entities. |
+| Media, reflections, signals, pack/workout execution support | Turso or device-operational support | Not independently created as canonical domain entities by the Waymark app. |
 | Schema, migration, idempotency, change log, snapshot and cursor control | System | Never edited through product UI. |
 
 Field ownership is enforced in `tursoFullDatabaseContract.ts`. A writer designation is not permission to mutate every column.
@@ -111,9 +112,11 @@ npm run turso:migrate-full-db -- --latest-export --apply --confirm-vault <vault-
 
 ## Seed and restore
 
-Seed/code may define and publish catalog data through the workspace publisher. Mobile seed must not create a parallel canonical world.
+Workspace scripts may define and publish catalog and planning data directly to Turso. They are one-run publisher tools and are not linked into the mobile bundle. The mobile runtime has no catalog or planning seed/bootstrap path.
 
 On a fresh install, Waymark creates only the minimum local provenance needed to connect, then restores the Turso Full-DB snapshot before runtime materialization. Reinstall recovery is limited only by EOD mutations that were never pushed and media blobs that were never uploaded.
+
+At runtime, the only domain entity creates accepted from Waymark are `memories`, `mark_instances`, and `backlog_items`. The only workspace-owned entity mutations accepted from Waymark are `status` changes on `expeditions`, `milestones`, and `mark_instances`.
 
 ## Semantic identity
 

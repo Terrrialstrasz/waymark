@@ -7,7 +7,8 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_WAYMARK_APP_VARIANT": "dev"
+        "EXPO_PUBLIC_WAYMARK_APP_VARIANT": "dev",
+        "EXPO_PUBLIC_WAYMARK_APPLICATION_ID": "com.waymark.lifeos.dev"
       },
       "android": {
         "buildType": "apk"
@@ -16,7 +17,9 @@
     "apk-preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS": "true"
+        "EXPO_PUBLIC_WAYMARK_APP_VARIANT": "prod",
+        "EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS": "true",
+        "EXPO_PUBLIC_WAYMARK_APPLICATION_ID": "com.waymark.lifeos"
       },
       "android": {
         "buildType": "apk"
@@ -25,12 +28,29 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS": "true"
+        "EXPO_PUBLIC_WAYMARK_APP_VARIANT": "prod",
+        "EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS": "true",
+        "EXPO_PUBLIC_WAYMARK_APPLICATION_ID": "com.waymark.lifeos"
       },
       "android": {
         "buildType": "apk"
       }
     },
-    "production": {}
+    "production-tools": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_WAYMARK_APP_VARIANT": "prod",
+        "EXPO_PUBLIC_WAYMARK_PREVIEW_TOOLS": "true",
+        "EXPO_PUBLIC_WAYMARK_APPLICATION_ID": "com.waymark.lifeos"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_WAYMARK_APPLICATION_ID": "com.waymark.lifeos"
+      }
+    }
   }
 }

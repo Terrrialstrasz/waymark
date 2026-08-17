@@ -8,6 +8,7 @@ import { StatusChip } from "../primitives/StatusChip";
 import { WMText } from "../primitives/Text";
 import { foundationColors, spacing } from "../../theme/tokens";
 import { StyleSheet, View } from "react-native";
+import { isFinalMarkInstanceStatus } from "../../domain/waymark/markStatus";
 
 type Props = {
   mark: ExpeditionPlannedMarkItem;
@@ -18,10 +19,11 @@ type Props = {
 export function ExpeditionPlannedMarkRow({ mark, locale, onOpenMarkDetail }: Props) {
   const pathId = resolvePlannedMarkPathId(mark);
   const interactive = Boolean(onOpenMarkDetail);
+  const final = isFinalMarkInstanceStatus(mark.status);
   const content = (
     <View style={styles.content}>
       <View style={styles.topRow}>
-        <WMText numberOfLines={2} style={styles.title} variant="bodyStrong">
+        <WMText numberOfLines={2} style={[styles.title, final ? styles.titleFinal : null]} variant="bodyStrong">
           {mark.title}
         </WMText>
         {interactive ? <WaymarkIcon semanticName="utility.chevron" size="sm" state="muted" /> : null}
@@ -82,6 +84,10 @@ const styles = StyleSheet.create({
     color: foundationColors.ink.primary,
     flex: 1,
     minWidth: 0,
+  },
+  titleFinal: {
+    color: foundationColors.ink.disabled,
+    textDecorationLine: "line-through",
   },
   metaRow: {
     alignItems: "center",

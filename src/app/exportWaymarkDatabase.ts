@@ -3,6 +3,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { WAYMARK_DATABASE_NAME } from "../db/constants";
 import { getWaymarkDatabaseAsync } from "../db/sqlite";
+import { flushProductionDiagnostics } from "./productionDiagnostics";
 
 type ExportedDatabaseFile = {
   name: string;
@@ -65,10 +66,12 @@ export async function exportWaymarkDatabaseAsync(): Promise<WaymarkDatabaseExpor
   }
 
   const manifestUri = `${exportDirectoryUri}/manifest.json`;
+  const diagnosticLogUri = await flushProductionDiagnostics();
   const manifest = {
     exportedAt: new Date().toISOString(),
     exportDirectoryUri,
     files: exportedFiles,
+    diagnosticLogIncluded: Boolean(diagnosticLogUri),
   };
   await FileSystem.writeAsStringAsync(manifestUri, JSON.stringify(manifest, null, 2));
 
@@ -78,6 +81,7 @@ export async function exportWaymarkDatabaseAsync(): Promise<WaymarkDatabaseExpor
       name: file.name,
       sourceUri: file.destinationUri,
     })),
+    ...(diagnosticLogUri ? [{ name: "diagnostics/events.jsonl", sourceUri: diagnosticLogUri }] : []),
     {
       name: "manifest.json",
       contents: JSON.stringify(manifest, null, 2),

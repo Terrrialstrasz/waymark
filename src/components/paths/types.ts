@@ -157,6 +157,7 @@ export type WeeklyMilestoneMarkItem = {
   localDate: string;
   dayLabel: string;
   isDone: boolean;
+  isFinal: boolean;
   expeditionTitle?: string;
   milestoneTitle?: string;
   description?: string;

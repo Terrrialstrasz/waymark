@@ -268,7 +268,7 @@ function TodayMarkRow({
       </View>
       <View style={[styles.rowDivider, { backgroundColor: visual.borderColor }]} />
       <View style={styles.rowCopy}>
-        <WMText numberOfLines={2} style={[styles.rowTitle, { color: visual.titleColor }]} variant="sectionTitle">
+        <WMText numberOfLines={2} style={[styles.rowTitle, { color: visual.titleColor }, settled ? styles.rowTitleFinal : null]} variant="sectionTitle">
           {title}
         </WMText>
       </View>
@@ -674,6 +674,9 @@ const styles = StyleSheet.create({
   },
   rowTitle: {
     color: foundationColors.ink.primary,
+  },
+  rowTitleFinal: {
+    textDecorationLine: "line-through",
   },
   donePill: {
     backgroundColor: "#E8E3D5",

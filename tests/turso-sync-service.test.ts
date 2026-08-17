@@ -201,7 +201,7 @@ async function turso_upload_failure_keeps_local_canonical_state() {
 
     assert.equal(result.failed.length, 1);
     assert.equal(memory?.title, "Keep me");
-    assert.equal(outbox?.status, "failed");
+    assert.equal(outbox?.status, "retry_wait");
     assert.equal(outbox?.retry_count, 1);
     assert.match(outbox?.last_error ?? "", /network unavailable/);
   } finally {
@@ -264,7 +264,7 @@ async function turso_transient_network_failure_retries_then_stops_batch_early() 
     assert.equal(result.failed.length, 1);
     assert.equal(result.stoppedAfterTransientFailure, true);
     assert.equal(adapter.pushedRows.length, 2);
-    assert.deepEqual(rows.map((row) => row.status), ["failed", "pending", "pending"]);
+    assert.deepEqual(rows.map((row) => row.status), ["retry_wait", "pending", "pending"]);
   } finally {
     harness.close();
   }
@@ -292,7 +292,7 @@ async function turso_turso_cursor_failure_is_treated_as_transient() {
     assert.equal(result.failed.length, 1);
     assert.equal(result.stoppedAfterTransientFailure, true);
     assert.equal(adapter.pushedRows.length, 2);
-    assert.deepEqual(rows.map((row) => row.status), ["failed", "pending"]);
+    assert.deepEqual(rows.map((row) => row.status), ["retry_wait", "pending"]);
   } finally {
     harness.close();
   }

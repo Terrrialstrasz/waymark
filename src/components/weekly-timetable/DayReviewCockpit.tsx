@@ -15,6 +15,7 @@ type Props = {
   marks: TodayMarkItem[];
   hasWeeklyTimetableForDate: boolean;
   plannedItemCount: number;
+  isHistorical?: boolean;
   onOpenMarkDetail?: (mark: TodayMarkItem) => void;
 };
 
@@ -27,6 +28,7 @@ export function DayReviewCockpit({
   marks,
   hasWeeklyTimetableForDate,
   plannedItemCount,
+  isHistorical = false,
   onOpenMarkDetail,
 }: Props) {
   const copy = getCopy(locale);
@@ -35,7 +37,7 @@ export function DayReviewCockpit({
     <View style={styles.stack}>
       <View style={styles.header}>
         <WMText style={styles.title} variant="sectionTitle">
-          {copy.title}
+          {isHistorical ? copy.historyTitle : copy.title}
         </WMText>
         <WMText style={styles.meta} variant="meta">
           {localDate ? `${dateLabel} - ${plannedItemCount} ${copy.planUnit}` : copy.noDate}
@@ -71,6 +73,7 @@ export function DayReviewCockpit({
 function getCopy(locale: Locale) {
   return {
     title: locale === "vi" ? "Day Review Cockpit" : "Day Review Cockpit",
+    historyTitle: locale === "vi" ? "Lịch sử Mark" : "Mark history",
     noDate: locale === "vi" ? "Chua chon ngay" : "No day selected",
     planUnit: locale === "vi" ? "plan" : "plan",
     loadingTitle: locale === "vi" ? "Dang tai ngay" : "Loading day",

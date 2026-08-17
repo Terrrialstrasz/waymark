@@ -13,6 +13,7 @@ import { RecentCollectionRow } from "./RecentCollectionRow";
 import { UpcomingMemoryCard } from "./UpcomingMemoryCard";
 import { FieldJournalCarouselRail } from "../shared/FieldJournalCarouselRail";
 import { DateSelectorChip } from "./DateSelectorChip";
+import { JournalMediaSyncCard } from "./JournalMediaSyncCard";
 
 type Props = {
   locale?: Locale;
@@ -26,6 +27,7 @@ type Props = {
   selectedDateId?: string;
   onSelectDate?: (dayKey: string) => void;
   onOpenRecentCollection?: (rowId: string) => void;
+  mediaSync?: Omit<Parameters<typeof JournalMediaSyncCard>[0], "locale">;
 };
 
 export function JournalHomeTemplate({
@@ -40,6 +42,7 @@ export function JournalHomeTemplate({
   selectedDateId,
   onSelectDate,
   onOpenRecentCollection,
+  mediaSync,
 }: Props) {
   const c = getCopy(locale);
   const [showAllRecentRows, setShowAllRecentRows] = useState(false);
@@ -72,6 +75,7 @@ export function JournalHomeTemplate({
         title={c.journal.title}
       />
       <JournalLatestHero locale={locale} ownerId="journal-latest-hero" {...latestHero} />
+      {mediaSync ? <JournalMediaSyncCard {...mediaSync} locale={locale} /> : null}
 
       <SectionActionHeader
         actionable={!showAllRecentRows && recentRows.length > 7}

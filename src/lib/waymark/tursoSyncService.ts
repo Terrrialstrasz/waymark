@@ -4,6 +4,7 @@ import {
   assertAllowedSyncOutboxDrainTrigger,
   listPendingSyncOutboxRows,
   markSyncOutboxRowFailed,
+  markSyncOutboxRowRetryWait,
   markSyncOutboxRowSynced,
   markSyncOutboxRowSyncing,
   type SyncOutboxDrainTrigger,
@@ -70,6 +71,7 @@ export async function uploadWaymarkOutboxToTurso(input: WaymarkTursoUploadInput)
   const rows = await listPendingSyncOutboxRows(input.executor, {
     vaultId: input.vaultId,
     limit: input.limit ?? 100,
+    now: now(),
   });
   const result: WaymarkTursoUploadResult = {
     trigger,
@@ -86,11 +88,14 @@ export async function uploadWaymarkOutboxToTurso(input: WaymarkTursoUploadInput)
       const reason = ownership
         ? `Skipped ${ownership.mode} entity during Waymark activity upload. ${ownership.notes}`
         : "Skipped entity type that is not part of Waymark activity upload.";
-      await markSyncOutboxRowSynced(input.executor, {
-        id: row.id,
-        remoteRevision: null,
-        now: now(),
-      });
+      const skippedRow = await markSyncOutboxRowSyncing(input.executor, { id: row.id, now: now() });
+      if (skippedRow?.status === "syncing") {
+        await markSyncOutboxRowSynced(input.executor, {
+          id: row.id,
+          remoteRevision: null,
+          now: now(),
+        });
+      }
       result.skipped.push({
         outboxId: row.id,
         entityType: row.entity_type,
@@ -129,11 +134,23 @@ export async function uploadWaymarkOutboxToTurso(input: WaymarkTursoUploadInput)
         duplicate: pushed.duplicate,
       });
     } catch (error) {
-      await markSyncOutboxRowFailed(input.executor, {
-        id: syncingRow.id,
-        error,
-        now: now(),
-      });
+      const failedAt = now();
+      const transient = isTransientTursoUploadError(error);
+      if (transient) {
+        await markSyncOutboxRowRetryWait(input.executor, {
+          id: syncingRow.id,
+          error,
+          errorKind: "transient_network",
+          nextAttemptAt: failedAt + Math.max(5_000, retryDelayMs),
+          now: failedAt,
+        });
+      } else {
+        await markSyncOutboxRowFailed(input.executor, {
+          id: syncingRow.id,
+          error,
+          now: failedAt,
+        });
+      }
       result.failed.push({
         outboxId: syncingRow.id,
         entityType: syncingRow.entity_type,
@@ -141,7 +158,7 @@ export async function uploadWaymarkOutboxToTurso(input: WaymarkTursoUploadInput)
         idempotencyKey: syncingRow.idempotency_key,
         error: formatUploadError(error),
       });
-      if (stopOnTransientFailure && isTransientTursoUploadError(error)) {
+      if (stopOnTransientFailure && transient) {
         result.stoppedAfterTransientFailure = true;
         break;
       }
@@ -176,7 +193,7 @@ async function pushOutboxRowWithRetry(
   throw lastError;
 }
 
-function isTransientTursoUploadError(error: unknown): boolean {
+export function isTransientTursoUploadError(error: unknown): boolean {
   const message = formatUploadError(error).toLowerCase();
   return (
     message.includes("fetch failed") ||

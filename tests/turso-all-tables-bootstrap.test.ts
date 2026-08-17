@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { applyMigrationsAsync } from "../src/db/migrations/runner";
 import {
-  WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES,
-  WAYMARK_TURSO_CANONICAL_TABLES,
   enqueueSyncOutboxMutation,
-  enqueueAllWaymarkTablesForTursoUpload,
   listPendingSyncOutboxRows,
   type SyncOutboxRow,
 } from "../src/lib/waymark";
+import {
+  WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES,
+  WAYMARK_TURSO_CANONICAL_TABLES,
+  enqueueAllWaymarkTablesForTursoUpload,
+} from "../src/lib/waymark/tursoAllTablesBootstrap";
 
 type RunResult = {
   changes: number;
@@ -66,14 +68,19 @@ async function run() {
   assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "path"), false);
   assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "week_plan_item"), false);
   assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "mark_template"), false);
-  assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "signal"), true);
+  assert.equal(WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.some((table) => table.entityType === "signal"), false);
+  assert.deepEqual(
+    WAYMARK_TURSO_ACTIVITY_UPLOAD_TABLES.map((table) => table.entityType).sort(),
+    ["backlog_item", "mark_instance", "memory"],
+    "Legacy workspace snapshot helper must be incapable of enqueueing any entity outside the runtime create allowlist.",
+  );
 
   const harness = await createHarness();
   try {
     const schema = await harness.db.getFirstAsync<{ version: number }>(
       "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1;",
     );
-    assert.equal(schema?.version, 23);
+    assert.equal(schema?.version, 25);
     const planningState = await harness.db.getFirstAsync<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_sync_state' LIMIT 1;",
     );
@@ -121,17 +128,12 @@ async function run() {
       "SELECT * FROM sync_outbox WHERE entity_type = 'trail_day' AND entity_id = ? LIMIT 1;",
       "trail_day_activity_1",
     );
-    const payload = JSON.parse(trailDayOutbox?.payload_json ?? "{}") as Record<string, unknown>;
-
-    assert.equal(first.scanned, 1);
-    assert.equal(first.enqueued, 1);
-    assert.equal(second.scanned, 1);
-    assert.equal(second.enqueued, 1);
-    assert.equal(pending.length, 1);
-    assert.equal(trailDayOutbox?.local_revision, 3);
-    assert.equal(payload.id, "trail_day_activity_1");
-    assert.equal(payload.local_date, "2026-08-07");
-    assert.equal(payload.__waymark_table, "trail_days");
+    assert.equal(first.scanned, 0);
+    assert.equal(first.enqueued, 0);
+    assert.equal(second.scanned, 0);
+    assert.equal(second.enqueued, 0);
+    assert.equal(pending.length, 0);
+    assert.equal(trailDayOutbox, null);
   } finally {
     harness.close();
   }

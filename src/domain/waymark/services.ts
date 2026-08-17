@@ -84,6 +84,8 @@ export interface SubstituteMarkInstanceInput {
   substituteTitle: string;
   substituteDescription?: string;
   substitutePathId?: EntityId;
+  substituteTemplateId?: EntityId | null;
+  substituteWorkoutFlow?: boolean;
   substituteExpeditionId?: EntityId | null;
   substituteMilestoneId?: EntityId | null;
   substituteTrailDayId?: EntityId;

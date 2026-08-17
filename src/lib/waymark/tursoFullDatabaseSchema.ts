@@ -57,25 +57,32 @@ CREATE TABLE IF NOT EXISTS waymark_full_db_idempotency (
   mutation_id TEXT PRIMARY KEY NOT NULL,
   vault_id TEXT NOT NULL,
   device_id TEXT,
+  source_application_id TEXT,
   table_name TEXT NOT NULL,
   row_key TEXT NOT NULL,
   operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'delete')),
   global_revision INTEGER,
+  cleaned_at INTEGER,
   created_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_waymark_full_db_idempotency_vault_row
   ON waymark_full_db_idempotency(vault_id, table_name, row_key);
 
+CREATE INDEX IF NOT EXISTS idx_waymark_full_db_idempotency_application_cleanup
+  ON waymark_full_db_idempotency(vault_id, source_application_id, cleaned_at, created_at);
+
 CREATE TABLE IF NOT EXISTS waymark_full_db_change_log (
   global_revision INTEGER PRIMARY KEY AUTOINCREMENT,
   vault_id TEXT NOT NULL,
   device_id TEXT,
+  source_application_id TEXT,
   table_name TEXT NOT NULL,
   row_key TEXT NOT NULL,
   operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'delete')),
   entity_revision INTEGER NOT NULL,
   payload_snapshot TEXT NOT NULL,
+  before_payload_snapshot TEXT,
   payload_schema_version INTEGER NOT NULL DEFAULT 1,
   mutation_id TEXT,
   changed_at INTEGER NOT NULL
@@ -86,6 +93,9 @@ CREATE INDEX IF NOT EXISTS idx_waymark_full_db_change_log_vault_revision
 
 CREATE INDEX IF NOT EXISTS idx_waymark_full_db_change_log_row
   ON waymark_full_db_change_log(vault_id, table_name, row_key, global_revision);
+
+CREATE INDEX IF NOT EXISTS idx_waymark_full_db_change_log_mutation
+  ON waymark_full_db_change_log(vault_id, mutation_id);
 
 CREATE TABLE IF NOT EXISTS waymark_full_db_snapshots (
   snapshot_id TEXT PRIMARY KEY NOT NULL,
